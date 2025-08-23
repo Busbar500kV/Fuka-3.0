@@ -1,1 +1,12 @@
-gh
+# Core numerics
+numpy>=1.26
+
+# App + plotting
+streamlit>=1.32
+plotly>=5.17
+
+# (Optional but common) — safe to keep, used by streamlit internally at times
+pillow>=9.5
+
+# If you later reintroduce gaussian_filter or other ndimage ops, add:
+# scipy>=1.11
