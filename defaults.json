@@ -2,8 +2,8 @@
   "seed": 0,
   "frames": 100,
   "space": 32,
-  "k_flux": 0.08,
-  "k_motor": 0.20,
+  "k_flux": 0.6,
+  "k_motor": 0.05,
   "diffuse": 0.05,
   "decay": 0.05,
   "band": 3,
@@ -45,7 +45,7 @@
       }
     ]
   },
-  "chunk": 150,
+  "chunk": 25,
   "live": false,
   "thr3d": 0.1,
   "max3d": 40000,
@@ -61,7 +61,7 @@
     "flux_limit": 0.20,
     "boundary_leak": 0.01,
     "update_mode": "random",
-    "T": 0.001
+    "T": 0.0001
   },
   "fuka3": {
     "energy": {
