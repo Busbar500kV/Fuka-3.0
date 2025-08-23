@@ -16,7 +16,7 @@ from core.metrics import collect as collect_metrics
 st.set_page_config(page_title="Fuka 3.0 — Free‑Energy Simulation", layout="wide")
 
 # ---------- Strict defaults loading (no silent fallback) ----------
-def load_defaults_strict(path: str = "defaults.json") -> Dict[str, Any]:
+def load_defaults_strict(path: str = "default.json") -> Dict[str, Any]:
     if not os.path.exists(path):
         st.error(
             "default.json not found in project root. "
@@ -313,7 +313,9 @@ if st.button("Run / Rerun", use_container_width=True):
     engine = Engine(ecfg)
 
     # Local histories (we no longer rely on engine.env/engine.S histories)
-    T = int(ecfg.get("frames", 2000))
+    # NOTE: read frames from engine.cfg (a plain dict), not ecfg (a Config)
+    T = int(engine.cfg.get("frames", 2000))
+
     env_frames: List[np.ndarray] = []
     sub_frames: List[np.ndarray] = []
     t_series: List[int] = []
