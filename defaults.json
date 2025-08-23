@@ -64,110 +64,23 @@
     "T": 0.001
   },
   "fuka3": {
-    "simulation": {
-      "dt": 1.0,
-      "steps_per_frame": 1,
-      "max_frames": 2000,
-      "rng_seed": 0,
-      "deterministic": true,
-      "checkpoint_interval": 0,
-      "autosave_snapshots": false,
-      "snapshot_stride": 100,
-      "warmup_ticks": 0
-    },
-    "numerics": {
-      "integrator": "euler",
-      "epsilon": 1e-8,
-      "grad_clip": 5.0,
-      "value_clip": 1e6,
-      "stencil": "von_neumann",
-      "stability_cfl": 0.9,
-      "float_dtype": "float32",
-      "nan_guard": true
-    },
-    "scheduler": {
-      "tick_order": "connections_first",
-      "selection": "random",
-      "batch_size": 4096,
-      "parallel_chunksize": 0
-    },
-    "buffers": {
-      "entropy_window": 16,
-      "history_ring": 32,
-      "metrics_ring": 256
-    },
-    "limits": {
-      "max_connections": 200000,
-      "max_attractors": 20000,
-      "max_degree_per_event": 6,
-      "max_energy_per_event": 1000000000,
-      "min_free_energy_floor": 0.0
-    },
-    "init": {
-      "lattice_topology": "grid2d",
-      "neighbor_radius": 1,
-      "initial_free_energy": 0.5,
-      "initial_bound_energy": 0.0,
-      "seed_connections": "orthogonal",
-      "seed_density": 0.02
-    },
-    "io": {
-      "run_dir": "runs/fuka3",
-      "write_trace": false,
-      "trace_stride": 10,
-      "save_video": false,
-      "video_stride": 4
-    },
-    "metrics": {
-      "stride": 10,
-      "collect": [
-        "entropy_mean",
-        "entropy_p95",
-        "free_energy_total",
-        "bound_energy_total",
-        "temperature_mean",
-        "connections_alive",
-        "attractors_alive",
-        "avg_integration",
-        "avg_fitness",
-        "work_paid_per_tick",
-        "dissipation_per_tick"
-      ]
-    },
-    "debug": {
-      "log_level": "warn",
-      "assertions": true,
-      "profile_timing": false,
-      "sample_ids": 16
-    },
-    "visual": {
-      "draw_energy": false,
-      "draw_temperature": false,
-      "draw_stability": false,
-      "draw_integration": false
-    },
     "energy": {
-      "source_locations": [],
       "source_rate": 1.0,
       "transport_conductance": 0.15,
-      "use_potential_smoothing": true,
-      "boundary_leak": 0.0,
       "work_to_dissipation_fraction": 0.9,
       "step_cost_coeff": 0.01,
-      "alpha_energy_per_entropy": 1.0,
-      "refund_fraction_on_prune": 0.0
+      "alpha_energy_per_entropy": 1.0
     },
     "temperature": {
       "T0": 0.001,
       "beta_bound": 0.01,
-      "beta_signal": 0.0,
-      "use_edge_temperature": false
+      "beta_signal": 0.0
     },
     "connection": {
       "init": {
         "amplitude_range": [0.05, 0.15],
         "frequency_range": [0.05, 0.25],
-        "phase_range": [0.0, 6.28318530718],
+        "phase_range": [0.0, 6.283185307179586],
         "curvature_range": [0.0, 0.1],
         "plasticity_range": [0.01, 0.05]
       },
@@ -175,29 +88,13 @@
         "eta": 0.05,
         "entropy_window": 16,
         "entropy_kind": "variance",
-        "update_schedule": "random",
-        "flux_limit": 0.2
+        "flux_limit": 0.20
       }
     },
     "denoising": {
       "use_sinusoid_term": true,
       "kappa_scale": 1.0,
-      "gradient_clip": 1.0,
-      "min_entropy_drop": 0.0
-    },
-    "morphology": {
-      "stability_threshold_grow": 0.6,
-      "stability_threshold_prune": 0.15,
-      "max_degree_per_event": 6,
-      "growth_energy_toll": 0.1,
-      "growth_integration_coeff": 0.5,
-      "prune_refund_fraction": 0.0,
-      "spawn_bias_from_parent": 0.5,
-      "neighbor_scan_radius": 1
-    },
-    "integration": {
-      "sigma_theta": 0.5,
-      "fitness_efficiency_mix": 1.0
+      "gradient_clip": 1.0
     },
     "attractors": {
       "spawn_prob": 0.01,
@@ -207,11 +104,14 @@
       "amplitude_init": 0.05,
       "amplitude_min": 0.005,
       "radius": 1,
-      "eta_amplitude": 0.1,
+      "eta_amplitude": 0.10,
       "sigma_theta": 0.5,
       "sigma_signal": 0.5,
-      "propagate_energy": 0.05,
-      "feature_map": "meanvar"
+      "propagate_energy": 0.05
+    },
+    "integration": {
+      "sigma_theta": 0.5,
+      "fitness_efficiency_mix": 1.0
     }
   }
 }
