@@ -1,174 +1,128 @@
 # core/engine.py
 from __future__ import annotations
 import numpy as np
+from typing import Dict, Any, Tuple, Optional
 
-from .config import Config
-from .env import build_env
-from .organism import History
-from .physics import step_physics, resample_row
-
-
-def _resample_2d(frame: np.ndarray, new_y: int, new_x: int) -> np.ndarray:
-    """
-    Resample a 2D array [Y0, X0] -> [new_y, new_x] with separable linear interpolation.
-    """
-    Y0, X0 = frame.shape
-    if (Y0, X0) == (new_y, new_x):
-        return frame
-
-    # interp along X for each row
-    if X0 != new_x:
-        x_src = np.linspace(0.0, 1.0, X0)
-        x_tgt = np.linspace(0.0, 1.0, new_x)
-        tmp = np.zeros((Y0, new_x), dtype=float)
-        for y in range(Y0):
-            tmp[y] = np.interp(x_tgt, x_src, frame[y])
-    else:
-        tmp = frame
-
-    # interp along Y for each column
-    if Y0 != new_y:
-        y_src = np.linspace(0.0, 1.0, Y0)
-        y_tgt = np.linspace(0.0, 1.0, new_y)
-        out = np.zeros((new_y, new_x), dtype=float)
-        for x in range(new_x):
-            out[:, x] = np.interp(y_tgt, y_src, tmp[:, x])
-        return out
-    else:
-        return tmp
-
-
-def _entropy_from_array(A: np.ndarray) -> float:
-    """
-    Shannon entropy over a nonnegative normalization of A.
-    We shift so min(A) -> 0, add tiny epsilon, then normalize to sum=1.
-    """
-    a = np.asarray(A, dtype=float)
-    a = a - float(np.min(a))
-    a = a + 1e-12
-    s = float(np.sum(a))
-    if s <= 0.0 or not np.isfinite(s):
-        return 0.0
-    p = a / s
-    # safe entropy (ignore zeros after epsilon add)
-    return float(-np.sum(p * np.log(p)))
-
+from . import physics
+from .metrics import collect, format_for_log  # optional logging
 
 class Engine:
-    """
-    Streaming‑capable engine.
-
-    - 1D: env shape (T, X_env), substrate S shape (T, X).
-    - 2D: env shape (T, Y_env, X_env), substrate S shape (T, Y, X) with Y=X=cfg.space.
-    """
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Dict[str, Any]):
         self.cfg = cfg
-        self.rng = np.random.default_rng(cfg.seed)
+        self.rng = np.random.default_rng(int(cfg.get("seed", 0)))
 
-        # Build full environment timeline
-        self.env = build_env(cfg.env, self.rng)  # (T, X_env) or (T, Y_env, X_env)
-        self.T = int(cfg.frames)
+        # --- sim dims / UI knobs (unchanged)
+        self.frames = int(cfg.get("frames", 2000))
+        self.space  = int(cfg.get("space", 64))
+        self.k_flux   = float(cfg.get("k_flux", 0.08))
+        self.k_motor  = float(cfg.get("k_motor", 0.20))
+        self.diffuse  = float(cfg.get("diffuse", 0.05))
+        self.decay    = float(cfg.get("decay", 0.05))
+        self.band     = int(cfg.get("band", 3))
+        self.bc       = str(cfg.get("bc", "reflect"))
 
-        # Determine dimensionality and allocate substrate
-        if self.env.ndim == 2:
-            # 1‑D substrate
-            self.mode = "1d"
-            self.X = int(cfg.space)
-            self.S = np.zeros((self.T, self.X), dtype=float)
-        elif self.env.ndim == 3:
-            # 2‑D substrate (square: Y=X=space)
-            self.mode = "2d"
-            self.Y = int(cfg.space)
-            self.X = int(cfg.space)
-            self.S = np.zeros((self.T, self.Y, self.X), dtype=float)
-        else:
-            raise ValueError(f"Unsupported env dimensions: {self.env.shape}")
+        # physics & fuka3 config blocks (pass through)
+        self.physics_cfg = dict(cfg.get("physics", {}))
+        self.fuka3_cfg   = dict(cfg.get("fuka3", {}))
 
-        self.hist = History()
+        # --- substrate & environment (2D)
+        # Substrate field S has shape [H, W] == [space, space]
+        H = W = self.space
+        self.S = np.zeros((H, W), dtype=float)
 
-        # Precompute physics kwargs from defaults.json (if any)
-        self._phys_kwargs = dict(self.cfg.physics or {})
+        # Environment E is supplied per frame (H, W). If your project
+        # already has an env generator, plug it in here instead.
+        self.env_cfg = cfg.get("env", {})
+        self.env_H = int(self.env_cfg.get("height", H))
+        self.env_W = int(self.env_cfg.get("length", W))
+        self.env_frames = int(self.env_cfg.get("frames", self.frames))
+        self.env_sigma  = float(self.env_cfg.get("noise_sigma", 0.0))
+        # Prebuild a simple env to match your defaults (moving peaks).
+        self.env_sources = self.env_cfg.get("sources", [])
 
-    # ---------- steps ----------
-    def _step_1d(self, t: int):
-        # env row -> resample to substrate width
-        e_row = self.env[t]                 # (X_env,)
-        e_row = resample_row(e_row, self.X) # (X,)
+        # runtime counters
+        self.frame_idx = 0
 
-        prev = self.S[t-1] if t > 0 else self.S[0]
-        cur, flux = step_physics(
-            prev_S=prev,
-            env_row=e_row,
-            k_flux=self.cfg.k_flux,
-            k_motor=self.cfg.k_motor,
-            diffuse=self.cfg.diffuse,
-            decay=self.cfg.decay,
-            rng=self.rng,
-            band=self.cfg.band,
-            bc=self.cfg.bc,
-            **self._phys_kwargs,
+    # ---------- Simple synthetic environment to match your JSON ----------
+    def _env_field(self, t: int) -> np.ndarray:
+        H, W = self.env_H, self.env_W
+        E = np.zeros((H, W), dtype=float)
+
+        def add_peak_2d(amp, cx, cy, wx, wy):
+            y, x = np.indices((H, W))
+            E[:] += amp * np.exp(-((x - cx) ** 2) / (2 * wx * wx) - ((y - cy) ** 2) / (2 * wy * wy))
+
+        for src in self.env_sources:
+            kind = src.get("kind", "moving_peak_2d")
+            if kind == "moving_peak_2d":
+                amp = float(src.get("amp", 1.0))
+                vx  = float(src.get("speed_x", 0.0))
+                vy  = float(src.get("speed_y", 0.0))
+                wx  = float(src.get("width_x", 6.0))
+                wy  = float(src.get("width_y", 6.0))
+                sx  = float(src.get("start_x", W//2))
+                sy  = float(src.get("start_y", H//2))
+                cx  = (sx + vx * t) % W
+                cy  = (sy + vy * t) % H
+                add_peak_2d(amp, cx, cy, wx, wy)
+
+            elif kind == "moving_peak":
+                # 1D strip peak centered along y (like your sample)
+                amp = float(src.get("amp", 0.6))
+                v   = float(src.get("speed", 0.02))
+                w   = float(src.get("width", 5.0))
+                start = float(src.get("start", W//2))
+                y_center = src.get("y_center", "mid")
+                wy = float(src.get("width_y", 18.0))
+                cx = (start + v * t) % W
+                cy = H//2 if y_center == "mid" else float(y_center)
+                # add a ridge by summing Gaussians across y
+                y, x = np.indices((H, W))
+                E += amp * np.exp(-((x - cx) ** 2) / (2 * w * w)) * np.exp(-((y - cy) ** 2) / (2 * wy * wy))
+
+        if self.env_sigma > 0.0:
+            E += self.env_sigma * self.rng.standard_normal(size=E.shape)
+        # if your renderer expects env to match substrate size, resample if needed
+        if (H, W) != self.S.shape:
+            E = physics._resample_2d(E, self.S.shape)
+        return E
+
+    # ---------- One simulation step ----------
+    def step(self) -> Tuple[np.ndarray, float, np.ndarray]:
+        E = self._env_field(self.frame_idx)
+
+        S_next, flux = physics.step_physics(
+            self.S, E,
+            self.k_flux, self.k_motor, self.diffuse, self.decay, self.rng,
+            band=self.band, bc=self.bc,
+            # legacy physics knobs (UI preserved)
+            T=self.physics_cfg.get("T", 0.001),
+            flux_limit=self.physics_cfg.get("flux_limit", 0.20),
+            boundary_leak=self.physics_cfg.get("boundary_leak", 0.01),
+            update_mode=self.physics_cfg.get("update_mode", "random"),
+            # NEW: full Fuka 3.0 block
+            fuka3=self.fuka3_cfg,
         )
-        # cur is (X,)
-        self.S[t] = cur
 
-        # telemetry
-        self.hist.t.append(t)
-        self.hist.E_cell.append(float(np.mean(cur)))
-        self.hist.E_env.append(float(np.mean(e_row)))
-        self.hist.E_flux.append(float(flux))
-        # new telemetry
-        self.hist.variance.append(float(np.var(cur)))
-        self.hist.total_mass.append(float(np.sum(cur)))
-        self.hist.entropy.append(_entropy_from_array(cur))
+        self.S = S_next
+        self.frame_idx += 1
+        return self.S, flux, E
 
-    def _step_2d(self, t: int):
-        # env frame (Y_env, X_env) -> resample to (Y, X)
-        E_t = self.env[t]
-        E_t_rs = _resample_2d(E_t, new_y=self.Y, new_x=self.X)  # (Y, X)
+    # ---------- Optional: log metrics every N frames ----------
+    def maybe_log_metrics(self, N: int = 10):
+        if (self.frame_idx % N) == 0:
+            try:
+                rows = collect()
+                print(format_for_log(rows))
+            except Exception:
+                pass  # never crash sim on logging
 
-        prev = self.S[t-1] if t > 0 else self.S[0]              # (Y, X)
-        cur, flux = step_physics(
-            prev_S=prev,             # (Y, X)
-            env_row=E_t_rs,          # (Y, X)
-            k_flux=self.cfg.k_flux,
-            k_motor=self.cfg.k_motor,
-            diffuse=self.cfg.diffuse,
-            decay=self.cfg.decay,
-            rng=self.rng,
-            band=self.cfg.band,
-            bc=self.cfg.bc,
-            **self._phys_kwargs,
-        )
-
-        # --- compatibility shim: if some physics impl returns (2, Y, X) stack, take channel 0
-        if cur.ndim == 3 and cur.shape[0] == 2 and cur.shape[1:] == (self.Y, self.X):
-            cur = cur[0]
-
-        # Sanity: ensure we got exactly (Y, X)
-        if cur.shape != (self.Y, self.X):
-            raise ValueError(f"Unexpected physics output shape {cur.shape}, expected {(self.Y, self.X)}")
-
-        self.S[t] = cur
-
-        # telemetry
-        self.hist.t.append(t)
-        self.hist.E_cell.append(float(np.mean(cur)))
-        self.hist.E_env.append(float(np.mean(E_t_rs)))
-        self.hist.E_flux.append(float(flux))
-        # new telemetry
-        self.hist.variance.append(float(np.var(cur)))
-        self.hist.total_mass.append(float(np.sum(cur)))
-        self.hist.entropy.append(_entropy_from_array(cur))
-
-    def step(self, t: int):
-        if self.mode == "1d":
-            self._step_1d(t)
-        else:
-            self._step_2d(t)
-
-    # ---------- run ----------
-    def run(self, progress_cb=None):
-        for t in range(self.T):
-            self.step(t)
-            if progress_cb is not None:
-                progress_cb(t)
+# Convenience runner (optional)
+def run(cfg: Dict[str, Any], on_frame=None):
+    eng = Engine(cfg)
+    for _ in range(eng.frames):
+        S, flux, E = eng.step()
+        if on_frame is not None:
+            on_frame(eng.frame_idx, S, E, flux)
+        eng.maybe_log_metrics(10)
+    return eng
