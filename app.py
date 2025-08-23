@@ -1,6 +1,6 @@
 # app.py
 from __future__ import annotations
-import json, os
+import json, os, time
 from copy import deepcopy
 from typing import Any, Dict, Tuple, List
 
@@ -159,24 +159,15 @@ had_thr3d = "thr3d" in user_cfg
 had_max3d = "max3d" in user_cfg
 had_vis   = "vis"   in user_cfg
 
+# We keep reading these, but we won’t attempt mid‑run plotting (Streamlit limitation).
 live  = bool(user_cfg.pop("live",  True))   if had_live  else None
 chunk = int(user_cfg.pop("chunk",  150))    if had_chunk else None
 thr3d = float(user_cfg.pop("thr3d", 0.75))  if had_thr3d else None
 max3d = int(user_cfg.pop("max3d",  40000))  if had_max3d else None
 vis   = user_cfg.pop("vis", {})             if had_vis   else None
 
-if not had_live or not had_chunk:
-    st.sidebar.warning("Optional streaming controls ('live', 'chunk') not found in default.json. "
-                       "Add them to control streaming behavior via UI.")
-
-if not had_thr3d or not had_max3d:
-    st.sidebar.warning("Optional 3‑D controls ('thr3d', 'max3d') not found in default.json. "
-                       "3‑D view will be disabled unless you add them.")
-
 # Visual knobs for 2‑D heatmap
 if vis is None:
-    st.sidebar.warning("Optional 'vis' block not found in default.json. "
-                       "Heatmap visibility controls (heat_floor, heat_gamma, env_opacity, sub_opacity) will be defaulted in code.")
     heat_floor, heat_gamma, env_opacity, sub_opacity = 0.10, 1.0, 1.0, 0.85
 else:
     heat_floor  = float(vis.get("heat_floor", 0.10))
@@ -193,24 +184,20 @@ plot3d_ph  = st.empty()
 
 # ---------- Plot helpers ----------
 def _norm(A: np.ndarray) -> np.ndarray:
-    m = float(np.nanmin(A))
-    M = float(np.nanmax(A))
+    m = float(np.nanmin(A)); M = float(np.nanmax(A))
     if not np.isfinite(m) or not np.isfinite(M) or M - m < 1e-12:
         return np.zeros_like(A)
     return (A - m) / (M - m + 1e-12)
 
 def _apply_floor_gamma(Z: np.ndarray, floor: float, gamma: float) -> np.ndarray:
     Z = np.clip(Z, 0.0, 1.0)
-    if gamma != 1.0:
-        Z = Z ** float(gamma)
-    if floor > 0.0:
-        Z = np.where(Z >= floor, Z, np.nan)
+    if gamma != 1.0: Z = Z ** float(gamma)
+    if floor > 0.0: Z = np.where(Z >= floor, Z, np.nan)
     return Z
 
 def _resample_rows(M: np.ndarray, new_len: int) -> np.ndarray:
     T, X = M.shape
-    if X == new_len:
-        return M
+    if X == new_len: return M
     x_src = np.linspace(0.0, 1.0, X)
     x_tgt = np.linspace(0.0, 1.0, new_len)
     out = np.zeros((T, new_len), dtype=float)
@@ -219,12 +206,9 @@ def _resample_rows(M: np.ndarray, new_len: int) -> np.ndarray:
     return out
 
 def draw_combined_heatmap(ph, E_stack: np.ndarray, S_stack: np.ndarray, title="Env + Substrate (combined, zoomable)"):
-    E = E_stack
-    S = S_stack
-    if E.ndim == 3:
-        E = E[:, 0, :]
-    if S.ndim == 3:
-        S = S[:, 0, :]
+    E = E_stack; S = S_stack
+    if E.ndim == 3: E = E[:, 0, :]
+    if S.ndim == 3: S = S[:, 0, :]
     if S.shape[1] != E.shape[1]:
         S_res = _resample_rows(S, E.shape[1])
     else:
@@ -259,8 +243,7 @@ def draw_stats_timeseries(ph, t, entropy=None, variance=None, total_mass=None, t
         fig.add_trace(go.Scatter(x=t, y=variance, name="variance")); has_any = True
     if total_mass is not None and len(total_mass) > 0:
         fig.add_trace(go.Scatter(x=t, y=total_mass, name="total_mass")); has_any = True
-    if not has_any:
-        return
+    if not has_any: return
     fig.update_layout(xaxis_title="t (frames)", yaxis_title="value", title=title, height=360, template="plotly_dark")
     ph.plotly_chart(fig, use_container_width=True, theme=None, key=new_key("stats"))
 
@@ -312,10 +295,8 @@ if st.button("Run / Rerun", use_container_width=True):
     ecfg = make_config_from_dict(user_cfg)
     engine = Engine(ecfg)
 
-    # Local histories (we no longer rely on engine.env/engine.S histories)
-    # NOTE: read frames from engine.cfg (a plain dict), not ecfg (a Config)
+    # Histories
     T = int(engine.cfg.get("frames", 2000))
-
     env_frames: List[np.ndarray] = []
     sub_frames: List[np.ndarray] = []
     t_series: List[int] = []
@@ -326,59 +307,66 @@ if st.button("Run / Rerun", use_container_width=True):
     variance_series: List[float] = []
     total_mass_series: List[float] = []
 
-    def redraw(final: bool = False):
-        if len(env_frames) == 0:
-            return
-        E_stack = np.stack(env_frames, axis=0)   # (t, H, W)
-        S_stack = np.stack(sub_frames, axis=0)   # (t, H, W)
+    # Progress bar (updates are visible during execution)
+    prog = st.progress(0, text="Running simulation…")
+    status = st.empty()
+
+    ok = True
+    try:
+        for step_idx in range(T):
+            S, flux, E = engine.step()
+
+            # Append frames & stats
+            env_frames.append(E.copy())
+            sub_frames.append(S.copy())
+            t_series.append(step_idx)
+
+            metrics_rows = collect_metrics()
+            if metrics_rows:
+                m0 = metrics_rows[0]
+                e_cell = float(m0["free_energy_total"] + m0["bound_energy_total"])
+                ent = float(m0["entropy_mean"])
+            else:
+                e_cell = 0.0
+                ent = 0.0
+
+            e_env = float(np.sum(np.abs(E)))
+            varS = float(np.var(S))
+            massS = float(np.sum(np.abs(S)))
+
+            e_cell_series.append(e_cell)
+            e_env_series.append(e_env)
+            e_flux_series.append(float(flux))
+            entropy_series.append(ent)
+            variance_series.append(varS)
+            total_mass_series.append(massS)
+
+            # progress UI
+            if T > 0:
+                pct = int(100 * (step_idx + 1) / T)
+                prog.progress(pct, text=f"Running simulation… {pct}%")
+                if (step_idx % 50) == 0:
+                    status.write(f"Frame {step_idx+1}/{T}  |  ⌀|S|={np.mean(np.abs(S)):.4f}  flux={flux:.5f}")
+    except Exception as e:
+        ok = False
+        prog.empty()
+        st.exception(e)
+
+    if ok:
+        prog.progress(100, text="Simulation complete")
+
+        # Stack and draw
+        try:
+            E_stack = np.stack(env_frames, axis=0)
+            S_stack = np.stack(sub_frames, axis=0)
+        except Exception as e:
+            st.exception(e)
+            st.stop()
+
         draw_combined_heatmap(combo2d_ph, E_stack, S_stack)
         draw_energy_timeseries(energy_ph, t_series, e_cell_series, e_env_series, e_flux_series)
         draw_stats_timeseries(stats_ph, t_series, entropy_series, variance_series, total_mass_series)
-        if final:
-            if (thr3d is not None) and (max3d is not None):
-                draw_sparse_3d(plot3d_ph, E_stack, S_stack, thr=float(thr3d), max_points=int(max3d))
-            else:
-                st.warning("3‑D view disabled: add 'thr3d' and 'max3d' to default.json to enable.")
-
-    # Streaming only if optional knobs were provided
-    do_stream = (live is not None) and (chunk is not None) and bool(live)
-    chunk_n = int(chunk) if chunk is not None else 150
-    last_draw_t = -1
-
-    for step_idx in range(T):
-        S, flux, E = engine.step()
-
-        # Append frames & stats
-        env_frames.append(E.copy())
-        sub_frames.append(S.copy())
-        t_series.append(step_idx)
-
-        # Metrics snapshot (one substrate state expected; use first if present)
-        metrics_rows = collect_metrics()
-        if metrics_rows:
-            m0 = metrics_rows[0]
-            e_cell = float(m0["free_energy_total"] + m0["bound_energy_total"])
-            ent = float(m0["entropy_mean"])
+        if (thr3d is not None) and (max3d is not None):
+            draw_sparse_3d(plot3d_ph, E_stack, S_stack, thr=float(thr3d), max_points=int(max3d))
         else:
-            e_cell = 0.0
-            ent = 0.0
-
-        e_env = float(np.sum(np.abs(E)))
-        varS = float(np.var(S))
-        massS = float(np.sum(np.abs(S)))
-
-        e_cell_series.append(e_cell)
-        e_env_series.append(e_env)
-        e_flux_series.append(float(flux))
-        entropy_series.append(ent)
-        variance_series.append(varS)
-        total_mass_series.append(massS)
-
-        # Live redraw
-        if do_stream and (step_idx - last_draw_t >= chunk_n or step_idx == T - 1):
-            last_draw_t = step_idx
-            redraw(final=(step_idx == T - 1))
-
-    # Final redraw if not streamed
-    if not do_stream:
-        redraw(final=True)
+            st.warning("3‑D view disabled: add 'thr3d' and 'max3d' to default.json to enable.")
