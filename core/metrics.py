@@ -3,14 +3,13 @@ from __future__ import annotations
 from typing import List, Dict, Any, Optional
 import time
 
-# We read metrics from the physics module’s registry (public getter).
 from . import physics as phys
 
 _last_emit_t: Optional[float] = None
 
 def collect() -> List[Dict[str, Any]]:
     """
-    Pull a snapshot of Fuka3 metrics from the physics layer.
+    Snapshot of Fuka3 metrics from the physics layer.
     Returns a list of dicts (one per active substrate state).
     Safe to call every frame.
     """
