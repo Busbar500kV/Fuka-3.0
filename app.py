@@ -16,7 +16,7 @@ from core.metrics import collect as collect_metrics
 st.set_page_config(page_title="Fuka 3.0 — Free‑Energy Simulation", layout="wide")
 
 # ---------- Strict defaults loading (no silent fallback) ----------
-def load_defaults_strict(path: str = "default.json") -> Dict[str, Any]:
+def load_defaults_strict(path: str = "defaults.json") -> Dict[str, Any]:
     if not os.path.exists(path):
         st.error(
             "default.json not found in project root. "
