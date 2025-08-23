@@ -344,28 +344,47 @@ class LocalState:
         return (_clip(g_A,-gc,gc), _clip(g_f,-gc,gc), _clip(g_phi,-gc,gc), _clip(g_kappa,-gc,gc), delta, env_edge)
 
     def _propose_grads_2d(self, t_idx: int, S: np.ndarray, E: np.ndarray):
-        dx = S[:,1:] - S[:,:-1]
-        dy = S[1:,:] - S[:-1,:]
-        ex = E[:,1:] - E[:,:-1]
-        ey = E[1:,:] - E[:-1,:]
-        mism_x = np.abs(dx) - np.abs(ex)
-        mism_y = np.abs(dy) - np.abs(ey)
+        # Substrate edges
+        dx = S[:,1:] - S[:,:-1]     # (H, W-1)
+        dy = S[1:,:] - S[:-1,:]     # (H-1, W)
+        # Environment edges
+        ex = E[:,1:] - E[:,:-1]     # (H, W-1)
+        ey = E[1:,:] - E[:-1,:]     # (H-1, W)
+
+        # Mismatch on edges
+        mism_x = np.abs(dx) - np.abs(ex)   # (H, W-1)
+        mism_y = np.abs(dy) - np.abs(ey)   # (H-1, W)
+
+        # Optional time sinusoid for A/f/phi coupling
         if self.use_sinusoid:
-            sinus = np.sin(2.0*np.pi*self.freq*t_idx + self.phi)
+            sinus = np.sin(2.0*np.pi*self.freq*t_idx + self.phi)  # (H, W)
         else:
             sinus = 0.0
+
+        # κ gradient assembled at cell centers by distributing edge mismatches
         g_kappa = np.zeros_like(S)
         g_kappa[:, :-1] -= mism_x
         g_kappa[:,  1:] += mism_x
         g_kappa[:-1, :] -= mism_y
         g_kappa[ 1:, :] += mism_y
+
+        # Build a cell-centered map of environment edge magnitude without invalid broadcasting
         env_mag_full = np.zeros_like(S)
-        env_mag = np.hypot(ex, ey)
-        env_mag_full[:, :-1] += env_mag
-        env_mag_full[:,  1:] += env_mag
-        g_A    = sinus * (env_mag_full - np.abs(_grad2d_x(S)) - np.abs(_grad2d_y(S)))
+        env_mag_full[:, :-1] += np.abs(ex)   # left neighbor of horizontal edge
+        env_mag_full[:,  1:] += np.abs(ex)   # right neighbor
+        env_mag_full[:-1, :] += np.abs(ey)   # top neighbor of vertical edge
+        env_mag_full[ 1:, :] += np.abs(ey)   # bottom neighbor
+
+        # Substrate gradient magnitudes at cell centers
+        Sx = _grad2d_x(S)
+        Sy = _grad2d_y(S)
+        sub_mag_full = np.abs(Sx) + np.abs(Sy)
+
+        # Parameter gradients
+        g_A    = sinus * (env_mag_full - sub_mag_full)
         g_f    = self.A * np.cos(2.0*np.pi*self.freq*t_idx + self.phi) * g_A
         g_phi  = self.A * np.cos(2.0*np.pi*self.freq*t_idx + self.phi)
+
         gc = self.grad_clip
         return (_clip(g_A,-gc,gc), _clip(g_f,-gc,gc), _clip(g_phi,-gc,gc), _clip(g_kappa,-gc,gc),
                 mism_x, mism_y)
