@@ -6,8 +6,37 @@ from typing import Dict, Any, Tuple, Optional
 from . import physics
 from .metrics import collect, format_for_log  # optional logging
 
+def _config_to_dict(cfg_obj: Any) -> Dict[str, Any]:
+    """
+    Accept either a plain dict or a project Config object and return a dict.
+    We try common patterns non-destructively and raise a clear error if unknown.
+    """
+    if isinstance(cfg_obj, dict):
+        return cfg_obj
+    # Common adapters
+    for attr in ("to_dict", "as_dict", "dict", "toJSON"):
+        if hasattr(cfg_obj, attr) and callable(getattr(cfg_obj, attr)):
+            try:
+                out = getattr(cfg_obj, attr)()
+                if isinstance(out, dict):
+                    return out
+            except Exception:
+                pass
+    # Fallback to shallow attribute dict
+    if hasattr(cfg_obj, "__dict__") and isinstance(cfg_obj.__dict__, dict):
+        # copy only JSON-like fields
+        out = {k: v for k, v in cfg_obj.__dict__.items() if not k.startswith("_")}
+        if out:
+            return out
+    raise TypeError(
+        "Engine expected a dict-like config. Got type "
+        f"{type(cfg_obj).__name__} without a supported to_dict/as_dict."
+    )
+
 class Engine:
-    def __init__(self, cfg: Dict[str, Any]):
+    def __init__(self, cfg: Any):
+        # ---- normalize config to a dict ----
+        cfg = _config_to_dict(cfg)
         self.cfg = cfg
         self.rng = np.random.default_rng(int(cfg.get("seed", 0)))
 
@@ -26,18 +55,15 @@ class Engine:
         self.fuka3_cfg   = dict(cfg.get("fuka3", {}))
 
         # --- substrate & environment (2D)
-        # Substrate field S has shape [H, W] == [space, space]
         H = W = self.space
         self.S = np.zeros((H, W), dtype=float)
 
-        # Environment E is supplied per frame (H, W). If your project
-        # already has an env generator, plug it in here instead.
-        self.env_cfg = cfg.get("env", {})
+        # Environment config
+        self.env_cfg = cfg.get("env", {}) if isinstance(cfg.get("env", {}), dict) else {}
         self.env_H = int(self.env_cfg.get("height", H))
         self.env_W = int(self.env_cfg.get("length", W))
         self.env_frames = int(self.env_cfg.get("frames", self.frames))
         self.env_sigma  = float(self.env_cfg.get("noise_sigma", 0.0))
-        # Prebuild a simple env to match your defaults (moving peaks).
         self.env_sources = self.env_cfg.get("sources", [])
 
         # runtime counters
@@ -76,13 +102,12 @@ class Engine:
                 wy = float(src.get("width_y", 18.0))
                 cx = (start + v * t) % W
                 cy = H//2 if y_center == "mid" else float(y_center)
-                # add a ridge by summing Gaussians across y
                 y, x = np.indices((H, W))
                 E += amp * np.exp(-((x - cx) ** 2) / (2 * w * w)) * np.exp(-((y - cy) ** 2) / (2 * wy * wy))
 
         if self.env_sigma > 0.0:
             E += self.env_sigma * self.rng.standard_normal(size=E.shape)
-        # if your renderer expects env to match substrate size, resample if needed
+
         if (H, W) != self.S.shape:
             E = physics._resample_2d(E, self.S.shape)
         return E
@@ -117,8 +142,8 @@ class Engine:
             except Exception:
                 pass  # never crash sim on logging
 
-# Convenience runner (optional)
-def run(cfg: Dict[str, Any], on_frame=None):
+# Convenience runner (optional; unused by app.py but kept for parity)
+def run(cfg: Any, on_frame=None):
     eng = Engine(cfg)
     for _ in range(eng.frames):
         S, flux, E = eng.step()
