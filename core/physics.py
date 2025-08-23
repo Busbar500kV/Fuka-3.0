@@ -187,6 +187,9 @@ class LocalState:
         self.attr_sigma_theta = float(_safe_get(f3A, "sigma_theta", 0.5))
         self.attr_sigma_signal = float(_safe_get(f3A, "sigma_signal", 0.5))
         self.attr_prop_energy = float(_safe_get(f3A, "propagate_energy", 0.05))
+        # NEW: budgets for performance
+        self.attr_max = int(_safe_get(f3A, "max_count", 256))
+        self.attr_spawn_trials = int(_safe_get(f3A, "spawn_trials", 32))
 
         # fields
         if self.ndim == 1:
@@ -210,6 +213,9 @@ class LocalState:
             self.kappa = self.rng.uniform(*self.kappa_range, size=(H, W))
 
         self.attractors: List[Attractor] = []
+        # cache last energy accounting for metrics
+        self._last_spent = 0.0
+        self._last_dissip = 0.0
 
     # ----- energy & temperature -----
     def _inject_sources(self, env_like: np.ndarray):
@@ -252,11 +258,16 @@ class LocalState:
             T = T + self.beta_signal * signal_var
         self.T = T
 
-    # ----- attractors lifecycle -----
+    # ----- attractors lifecycle (budgeted) -----
     def _maybe_spawn(self):
+        # Cap overall count
+        if len(self.attractors) >= self.attr_max:
+            return
+        trials = max(1, min(self.attr_spawn_trials, self.attr_max - len(self.attractors)))
         if self.ndim == 1:
             X = self.shape[0]
-            for i in range(X):
+            for _ in range(trials):
+                i = int(self.rng.integers(0, X))
                 if self.rng.random() < self.attr_spawn_prob and self.F[i] >= self.attr_spawn_energy:
                     psi = {
                         "A": self.rng.uniform(*self.A_range),
@@ -270,23 +281,28 @@ class LocalState:
                                                      self.attr_maint_rate, self.attr_decay,
                                                      self.attr_sigma_theta, self.attr_sigma_signal,
                                                      self.attr_spawn_energy, self.attr_prop_energy))
+                    if len(self.attractors) >= self.attr_max:
+                        break
         else:
             H, W = self.shape
-            for y in range(H):
-                for x in range(W):
-                    if self.rng.random() < self.attr_spawn_prob and self.F[y,x] >= self.attr_spawn_energy:
-                        psi = {
-                            "A": self.rng.uniform(*self.A_range),
-                            "f": self.rng.uniform(*self.f_range),
-                            "phi": self.rng.uniform(*self.phi_range),
-                            "kappa": self.rng.uniform(*self.kappa_range),
-                        }
-                        self.F[y,x] -= self.attr_spawn_energy
-                        self.B[y,x] += self.work_to_dissipation_fraction * self.attr_spawn_energy
-                        self.attractors.append(Attractor((y,x), 2, self.attr_radius, self.attr_amp_init, psi,
-                                                         self.attr_maint_rate, self.attr_decay,
-                                                         self.attr_sigma_theta, self.attr_sigma_signal,
-                                                         self.attr_spawn_energy, self.attr_prop_energy))
+            for _ in range(trials):
+                y = int(self.rng.integers(0, H))
+                x = int(self.rng.integers(0, W))
+                if self.rng.random() < self.attr_spawn_prob and self.F[y,x] >= self.attr_spawn_energy:
+                    psi = {
+                        "A": self.rng.uniform(*self.A_range),
+                        "f": self.rng.uniform(*self.f_range),
+                        "phi": self.rng.uniform(*self.phi_range),
+                        "kappa": self.rng.uniform(*self.kappa_range),
+                    }
+                    self.F[y,x] -= self.attr_spawn_energy
+                    self.B[y,x] += self.work_to_dissipation_fraction * self.attr_spawn_energy
+                    self.attractors.append(Attractor((y,x), 2, self.attr_radius, self.attr_amp_init, psi,
+                                                     self.attr_maint_rate, self.attr_decay,
+                                                     self.attr_sigma_theta, self.attr_sigma_signal,
+                                                     self.attr_spawn_energy, self.attr_prop_energy))
+                    if len(self.attractors) >= self.attr_max:
+                        break
 
     def _maintain_and_decay(self):
         alive = []
@@ -350,41 +366,41 @@ class LocalState:
         # Environment edges
         ex = E[:, 1:] - E[:, :-1]   # (H, W-1)
         ey = E[1:, :] - E[:-1, :]   # (H-1, W)
-    
+
         # Edge-wise mismatch
         mism_x = np.abs(dx) - np.abs(ex)   # (H, W-1)
         mism_y = np.abs(dy) - np.abs(ey)   # (H-1, W)
-    
+
         # Optional time sinusoid for A/f/phi coupling
         if self.use_sinusoid:
             sinus = np.sin(2.0 * np.pi * self.freq * t_idx + self.phi)  # (H, W)
         else:
             sinus = 0.0
-    
+
         # κ gradient at cell centers by distributing edge mismatches
         g_kappa = np.zeros_like(S)
         g_kappa[:, :-1] -= mism_x  # left cell of each horizontal edge
         g_kappa[:,  1:] += mism_x  # right cell
         g_kappa[:-1, :] -= mism_y  # top cell of each vertical edge
         g_kappa[ 1:, :] += mism_y  # bottom cell
-    
-        # Build a cell-centered map of environment edge magnitude WITHOUT mixing shapes
+
+        # Cell-centered map of environment edge magnitude (no cross-shape ops)
         env_mag_full = np.zeros_like(S)
         env_mag_full[:, :-1] += np.abs(ex)   # left neighbor of horizontal edge
         env_mag_full[:,  1:] += np.abs(ex)   # right neighbor
         env_mag_full[:-1, :] += np.abs(ey)   # top neighbor of vertical edge
         env_mag_full[ 1:, :] += np.abs(ey)   # bottom neighbor
-    
+
         # Substrate gradient magnitudes at cell centers
         Sx = _grad2d_x(S)
         Sy = _grad2d_y(S)
         sub_mag_full = np.abs(Sx) + np.abs(Sy)
-    
-        # Parameter gradients (denoising incentive + sinusoid coupling)
+
+        # Parameter gradients
         g_A   = sinus * (env_mag_full - sub_mag_full)
         g_f   = self.A * np.cos(2.0 * np.pi * self.freq * t_idx + self.phi) * g_A
         g_phi = self.A * np.cos(2.0 * np.pi * self.freq * t_idx + self.phi)
-    
+
         gc = self.grad_clip
         return (
             _clip(g_A,  -gc, gc),
@@ -444,23 +460,45 @@ class LocalState:
         dissip = self.work_to_dissipation_fraction * spent
         return spent, dissip
 
-    # ----- reward / selection / local propagation -----
+    # ----- reward / selection / local propagation (budgeted windows) -----
     def _reward_and_select(self, reward_map: np.ndarray, energy_map: np.ndarray):
         if reward_map is None or energy_map is None or not self.attractors:
             return
-        for k, w in self._masks():
-            W = w / (1e-12 + np.sum(w))
-            r = float(np.sum(W * reward_map))
-            e = float(np.sum(W * energy_map))
+        H, W = (self.shape if self.ndim == 2 else (1, self.shape[0]))
+        win_r = max(1, int(self.attr_radius) * 2)
+        for k in self.attractors:
+            if self.ndim == 1:
+                i = int(k.pos)
+                i0 = max(0, i - win_r); i1 = min(self.shape[0], i + win_r + 1)
+                Wv = np.exp(- (np.arange(i0, i1) - i)**2 / (2.0*max(1e-8, (k.radius**2))))
+                Wv = Wv / (1e-12 + np.sum(Wv))
+                r = float(np.sum(Wv * reward_map[i0:i1]))
+                e = float(np.sum(Wv * energy_map[i0:i1]))
+                # simple parameter closeness in the same window (use local averages)
+                G = 1.0
+            else:
+                y, x = k.pos
+                y0 = max(0, y - win_r); y1 = min(H, y + win_r + 1)
+                x0 = max(0, x - win_r); x1 = min(W, x + win_r + 1)
+                wy, wx = np.indices((y1 - y0, x1 - x0))
+                Wmask = np.exp(- ((wy + y0 - y)**2 + (wx + x0 - x)**2) / (2.0*max(1e-8, (k.radius**2))))
+                Wmask = Wmask / (1e-12 + np.sum(Wmask))
+                r = float(np.sum(Wmask * reward_map[y0:y1, x0:x1]))
+                e = float(np.sum(Wmask * energy_map[y0:y1, x0:x1]))
+                # local parameter proximity (cheaper than full-field)
+                A_loc   = self.A[y0:y1, x0:x1]
+                f_loc   = self.freq[y0:y1, x0:x1]
+                phi_loc = self.phi[y0:y1, x0:x1]
+                kap_loc = self.kappa[y0:y1, x0:x1]
+                G = float(np.mean(np.exp(-(
+                    (A_loc - k.psi_A)**2 +
+                    (f_loc - k.psi_f)**2 +
+                    (phi_loc - k.psi_phi)**2 +
+                    (kap_loc - k.psi_kappa)**2
+                ) / max(1e-8, k.sigma_theta**2))))
+
             eff = r / (e + 1e-12)
-            G = np.exp(-(
-                (self.A - k.psi_A)**2 +
-                (self.freq - k.psi_f)**2 +
-                (self.phi - k.psi_phi)**2 +
-                (self.kappa - k.psi_kappa)**2
-            ) / max(1e-8, k.sigma_theta**2))
-            integ = float(np.sum(W * G))
-            Rk = eff * integ
+            Rk = eff * G
             k.reward_avg = 0.9*k.reward_avg + 0.1*Rk
             k.amp += self.attr_eta_amp * k.amp * (Rk - k.reward_avg)
 
@@ -487,6 +525,8 @@ class LocalState:
                                                          self.attr_maint_rate, self.attr_decay,
                                                          self.attr_sigma_theta, self.attr_sigma_signal,
                                                          self.attr_spawn_energy, self.attr_prop_energy))
+                        if len(self.attractors) >= self.attr_max:
+                            return
         else:
             H, W = self.shape
             for k in list(self.attractors):
@@ -508,6 +548,8 @@ class LocalState:
                                                          self.attr_maint_rate, self.attr_decay,
                                                          self.attr_sigma_theta, self.attr_sigma_signal,
                                                          self.attr_spawn_energy, self.attr_prop_energy))
+                        if len(self.attractors) >= self.attr_max:
+                            return
 
 # ---------------- Main stepping function (preserves UI/engine API) ----------------
 
@@ -551,16 +593,13 @@ def step_physics(
     signal_var = _rolling_var_1d(S, win=max(3, st.entropy_window)) if st.ndim == 1 else _box_var2d(S)
     st._update_temperature(signal_var)
 
-    # Attractors: spawn + maintenance/decay
+    # Attractors: spawn + maintenance/decay (budgeted)
     st._maybe_spawn()
     st._maintain_and_decay()
 
     # --- Denoising / learning (with attractor bias) ---
     new_S = S.copy()
     T_eff = float(np.mean(st.T))
-
-    energy_paid_map = None
-    reward_map = None
 
     if st.ndim == 1:
         t_idx = rng.integers(0, 10**9)
@@ -574,7 +613,6 @@ def step_physics(
 
         dS_pos_sum = float(np.sum(np.maximum(0.0, np.abs(delta) - np.abs(env_edge))))
         spent, dissip = st._apply_energy_gated(T_eff, dS_pos_sum, dA, df, dphi, dk)
-        # record energy accounting for metrics
         st._last_spent = float(spent)
         st._last_dissip = float(dissip)
 
@@ -604,7 +642,6 @@ def step_physics(
 
         dS_pos_sum = float(np.sum(np.maximum(0.0, np.abs(mism_x))) + np.sum(np.maximum(0.0, np.abs(mism_y))))
         spent, dissip = st._apply_energy_gated(T_eff, dS_pos_sum, dA, df, dphi, dk)
-        # record energy accounting for metrics
         st._last_spent = float(spent)
         st._last_dissip = float(dissip)
 
@@ -623,12 +660,7 @@ def step_physics(
         energy_paid_map = np.full_like(S, spent / max(1, S.size))
         reward_map = np.full_like(S, dS_pos_sum / max(1, S.size))
 
-    # Ensure metrics attributes exist even if nothing spent this tick
-    if not hasattr(st, "_last_spent"):
-        st._last_spent = 0.0
-        st._last_dissip = 0.0
-
-    # Attractors: reward/selection + local propagation
+    # Attractors: reward/selection + local propagation (budgeted)
     st._reward_and_select(reward_map, energy_paid_map)
     st._propagate_if_strong()
 
@@ -649,6 +681,7 @@ def step_physics(
         if st.T_base > 0.0:
             cur = cur + st.T_base * rng.standard_normal(size=cur.shape)
         if k_motor != 0.0:
+            Sn = S / (1e-6 + float(np.max(np.abs(S)))) if np.any(S) else np.zeros_like(S)
             motor_scale = np.power(1e-6 + np.abs(Sn), 0.5)
             cur = cur + float(k_motor) * motor_scale * rng.standard_normal(size=cur.shape)
         if st.boundary_leak > 0.0 and cur.size >= 2:
