@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import List, Dict, Any, Optional
 import time
 
+# Pulls metrics snapshot from physics without modifying the sim
 from . import physics as phys
 
 _last_emit_t: Optional[float] = None
@@ -22,9 +23,9 @@ def collect() -> List[Dict[str, Any]]:
 
     rows = []
     for m in phys.get_fuka3_metrics():
-        m = dict(m)
-        m["dt_since_last_collect_s"] = dt
-        rows.append(m)
+        r = dict(m)
+        r["dt_since_last_collect_s"] = dt
+        rows.append(r)
     return rows
 
 def format_for_log(rows: List[Dict[str, Any]]) -> str:
