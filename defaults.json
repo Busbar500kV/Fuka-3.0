@@ -50,7 +50,7 @@
   "thr3d": 0.1,
   "max3d": 40000,
   "vis": {
-    "heat_floor": 0.10,
+    "heat_floor": 0.0,
     "heat_gamma": 1.0,
     "env_opacity": 1.0,
     "sub_opacity": 0.85
@@ -65,7 +65,7 @@
   },
   "fuka3": {
     "energy": {
-      "source_rate": 1.0,
+      "source_rate": 100.0,
       "transport_conductance": 0.15,
       "work_to_dissipation_fraction": 0.9,
       "step_cost_coeff": 0.01,
