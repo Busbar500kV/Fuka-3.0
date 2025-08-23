@@ -12,7 +12,7 @@ from core.config import make_config_from_dict
 from core.engine import Engine
 
 # ---------- Page ----------
-st.set_page_config(page_title="Fuka 2.0 — Free‑Energy Simulation", layout="wide")
+st.set_page_config(page_title="Fuka 3.0 — Free‑Energy Simulation", layout="wide")
 
 
 # ---------- Strict defaults loading (no silent fallback) ----------
