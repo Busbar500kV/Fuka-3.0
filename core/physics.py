@@ -344,56 +344,56 @@ class LocalState:
         return (_clip(g_A,-gc,gc), _clip(g_f,-gc,gc), _clip(g_phi,-gc,gc), _clip(g_kappa,-gc,gc), delta, env_edge)
 
     def _propose_grads_2d(self, t_idx: int, S: np.ndarray, E: np.ndarray):
-    # Substrate edges
-    dx = S[:, 1:] - S[:, :-1]   # (H, W-1)
-    dy = S[1:, :] - S[:-1, :]   # (H-1, W)
-    # Environment edges
-    ex = E[:, 1:] - E[:, :-1]   # (H, W-1)
-    ey = E[1:, :] - E[:-1, :]   # (H-1, W)
-
-    # Edge-wise mismatch
-    mism_x = np.abs(dx) - np.abs(ex)   # (H, W-1)
-    mism_y = np.abs(dy) - np.abs(ey)   # (H-1, W)
-
-    # Optional time sinusoid for A/f/phi coupling
-    if self.use_sinusoid:
-        sinus = np.sin(2.0 * np.pi * self.freq * t_idx + self.phi)  # (H, W)
-    else:
-        sinus = 0.0
-
-    # κ gradient at cell centers by distributing edge mismatches
-    g_kappa = np.zeros_like(S)
-    g_kappa[:, :-1] -= mism_x  # left cell of each horizontal edge
-    g_kappa[:,  1:] += mism_x  # right cell
-    g_kappa[:-1, :] -= mism_y  # top cell of each vertical edge
-    g_kappa[ 1:, :] += mism_y  # bottom cell
-
-    # Build a cell-centered map of environment edge magnitude WITHOUT mixing shapes
-    env_mag_full = np.zeros_like(S)
-    env_mag_full[:, :-1] += np.abs(ex)   # left neighbor of horizontal edge
-    env_mag_full[:,  1:] += np.abs(ex)   # right neighbor
-    env_mag_full[:-1, :] += np.abs(ey)   # top neighbor of vertical edge
-    env_mag_full[ 1:, :] += np.abs(ey)   # bottom neighbor
-
-    # Substrate gradient magnitudes at cell centers
-    Sx = _grad2d_x(S)
-    Sy = _grad2d_y(S)
-    sub_mag_full = np.abs(Sx) + np.abs(Sy)
-
-    # Parameter gradients (denoising incentive + sinusoid coupling)
-    g_A   = sinus * (env_mag_full - sub_mag_full)
-    g_f   = self.A * np.cos(2.0 * np.pi * self.freq * t_idx + self.phi) * g_A
-    g_phi = self.A * np.cos(2.0 * np.pi * self.freq * t_idx + self.phi)
-
-    gc = self.grad_clip
-    return (
-        _clip(g_A,  -gc, gc),
-        _clip(g_f,  -gc, gc),
-        _clip(g_phi,-gc, gc),
-        _clip(g_kappa, -gc, gc),
-        mism_x,
-        mism_y,
-    )
+        # Substrate edges
+        dx = S[:, 1:] - S[:, :-1]   # (H, W-1)
+        dy = S[1:, :] - S[:-1, :]   # (H-1, W)
+        # Environment edges
+        ex = E[:, 1:] - E[:, :-1]   # (H, W-1)
+        ey = E[1:, :] - E[:-1, :]   # (H-1, W)
+    
+        # Edge-wise mismatch
+        mism_x = np.abs(dx) - np.abs(ex)   # (H, W-1)
+        mism_y = np.abs(dy) - np.abs(ey)   # (H-1, W)
+    
+        # Optional time sinusoid for A/f/phi coupling
+        if self.use_sinusoid:
+            sinus = np.sin(2.0 * np.pi * self.freq * t_idx + self.phi)  # (H, W)
+        else:
+            sinus = 0.0
+    
+        # κ gradient at cell centers by distributing edge mismatches
+        g_kappa = np.zeros_like(S)
+        g_kappa[:, :-1] -= mism_x  # left cell of each horizontal edge
+        g_kappa[:,  1:] += mism_x  # right cell
+        g_kappa[:-1, :] -= mism_y  # top cell of each vertical edge
+        g_kappa[ 1:, :] += mism_y  # bottom cell
+    
+        # Build a cell-centered map of environment edge magnitude WITHOUT mixing shapes
+        env_mag_full = np.zeros_like(S)
+        env_mag_full[:, :-1] += np.abs(ex)   # left neighbor of horizontal edge
+        env_mag_full[:,  1:] += np.abs(ex)   # right neighbor
+        env_mag_full[:-1, :] += np.abs(ey)   # top neighbor of vertical edge
+        env_mag_full[ 1:, :] += np.abs(ey)   # bottom neighbor
+    
+        # Substrate gradient magnitudes at cell centers
+        Sx = _grad2d_x(S)
+        Sy = _grad2d_y(S)
+        sub_mag_full = np.abs(Sx) + np.abs(Sy)
+    
+        # Parameter gradients (denoising incentive + sinusoid coupling)
+        g_A   = sinus * (env_mag_full - sub_mag_full)
+        g_f   = self.A * np.cos(2.0 * np.pi * self.freq * t_idx + self.phi) * g_A
+        g_phi = self.A * np.cos(2.0 * np.pi * self.freq * t_idx + self.phi)
+    
+        gc = self.grad_clip
+        return (
+            _clip(g_A,  -gc, gc),
+            _clip(g_f,  -gc, gc),
+            _clip(g_phi,-gc, gc),
+            _clip(g_kappa, -gc, gc),
+            mism_x,
+            mism_y,
+        )
 
     # ----- Attractor gradient boost (bias) -----
     def _boost_grads_with_attractors_1d(self, gA, gf, gphi, gk):
