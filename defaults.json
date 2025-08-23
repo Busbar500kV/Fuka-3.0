@@ -16,7 +16,7 @@
     "sources": [
       {
         "kind": "moving_peak_2d",
-        "amp": 1.0,
+        "amp": 10.0,
         "speed_x": 0.015,
         "speed_y": 0.010,
         "width_x": 6.0,
