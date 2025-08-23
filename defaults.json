@@ -1,7 +1,7 @@
 {
   "seed": 0,
-  "frames": 2000,
-  "space": 64,
+  "frames": 100,
+  "space": 32,
   "k_flux": 0.08,
   "k_motor": 0.20,
   "diffuse": 0.05,
@@ -11,7 +11,7 @@
   "env": {
     "length": 256,
     "height": 256,
-    "frames": 2000,
+    "frames": 200,
     "noise_sigma": 0.01,
     "sources": [
       {
@@ -46,8 +46,8 @@
     ]
   },
   "chunk": 150,
-  "live": true,
-  "thr3d": 0.75,
+  "live": false,
+  "thr3d": 0.1,
   "max3d": 40000,
   "vis": {
     "heat_floor": 0.10,
