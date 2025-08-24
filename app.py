@@ -487,6 +487,7 @@ if st.button("Run / Rerun", use_container_width=True):
     st.session_state["combo3d_count"] = 0
     st.session_state["conn3d_count"]  = 0
 
+    physics.clear_states()
     engine = Engine(user_cfg)   # Engine normalizes dicts itself
 
     # Histories
