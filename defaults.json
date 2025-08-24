@@ -55,6 +55,17 @@
     "env_opacity": 1.0,
     "sub_opacity": 0.85
   },
+  "connections": {
+    "enable": true,
+    "thr_env": 0.1,
+    "base_window": 64,
+    "eval_window": 64,
+    "corr_threshold": 0.6,
+    "dvar_threshold": 0.0001,
+    "energy_quantile": 0.70,
+    "stride_t": 4,
+    "max_edges": 40000
+  },
   "physics": {
     "alpha_speed": 0.90,
     "beta_speed": 1.00,
