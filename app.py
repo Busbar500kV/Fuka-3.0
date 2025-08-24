@@ -9,9 +9,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from core import physics
 
-# from core.config import make_config_from_dict
 from core.engine import Engine
-from core.metrics import collect as collect_metrics
 
 # ---------- Page ----------
 st.set_page_config(page_title="Fuka 3.0 — Free‑Energy Simulation", layout="wide")
@@ -295,9 +293,6 @@ if st.button("Run / Rerun", use_container_width=True):
     st.session_state["energy_count"]  = 0
     st.session_state["stats_count"]   = 0
     st.session_state["combo3d_count"] = 0
-
-    # ecfg = make_config_from_dict(user_cfg)
-    # engine = Engine(ecfg)
     
     engine = Engine(user_cfg)   # Engine now normalizes dicts itself
 
