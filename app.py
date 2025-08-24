@@ -298,15 +298,6 @@ if st.button("Run / Rerun", use_container_width=True):
     ecfg = make_config_from_dict(user_cfg)
     engine = Engine(ecfg)
 
-    S, flux, E = engine.step()
-    
-    if step_idx == 0:
-        st.write({"E_min": float(np.min(E)), "E_max": float(np.max(E)),
-                  "E_mean": float(np.mean(E)), "E_any": bool(np.any(E)),
-                  "E_shape": E.shape})
-    
-    
-
     # Histories
     T = int(engine.cfg.get("frames", 2000))
     env_frames: List[np.ndarray] = []
@@ -327,7 +318,11 @@ if st.button("Run / Rerun", use_container_width=True):
     try:
         for step_idx in range(T):
             S, flux, E = engine.step()
-
+            if step_idx == 0:
+                st.write({"E_min": float(np.min(E)), "E_max": float(np.max(E)),
+                "E_mean": float(np.mean(E)), "E_any": bool(np.any(E)),
+                "E_shape": E.shape})
+                
             # Append frames & stats
             env_frames.append(E.copy())
             sub_frames.append(S.copy())
