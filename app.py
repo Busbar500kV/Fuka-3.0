@@ -287,12 +287,7 @@ def draw_sparse_3d(ph, E_stack: np.ndarray, S_stack: np.ndarray, thr: float, max
 # ---------- Run ----------
 if st.button("Run / Rerun", use_container_width=True):
     
-    S, flux, E = engine.step()
-    
-    if step_idx == 0:
-        st.write({"E_min": float(np.min(E)), "E_max": float(np.max(E)),
-                  "E_mean": float(np.mean(E)), "E_any": bool(np.any(E)),
-                  "E_shape": E.shape})
+
                 
     st.session_state["run_id"] += 1
     st.session_state["combo2d_count"] = 0
@@ -302,6 +297,15 @@ if st.button("Run / Rerun", use_container_width=True):
 
     ecfg = make_config_from_dict(user_cfg)
     engine = Engine(ecfg)
+
+    S, flux, E = engine.step()
+    
+    if step_idx == 0:
+        st.write({"E_min": float(np.min(E)), "E_max": float(np.max(E)),
+                  "E_mean": float(np.mean(E)), "E_any": bool(np.any(E)),
+                  "E_shape": E.shape})
+    
+    
 
     # Histories
     T = int(engine.cfg.get("frames", 2000))
