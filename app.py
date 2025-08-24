@@ -316,11 +316,7 @@ if st.button("Run / Rerun", use_container_width=True):
     try:
         for step_idx in range(T):
             S, flux, E = engine.step()
-            if step_idx == 0 or step_idx == chunk:
-                st.write({"E_min": float(np.min(E)), "E_max": float(np.max(E)),
-                "E_mean": float(np.mean(E)), "E_any": bool(np.any(E)),
-                "E_shape": E.shape})
-                
+            
             # Append frames & stats
             env_frames.append(E.copy())
             sub_frames.append(S.copy())
