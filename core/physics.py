@@ -643,3 +643,39 @@ def get_fuka3_metrics():
         except Exception:
             continue
     return out
+    
+# ------------------------------------------------------------
+# Attractors snapshot for UI (used by app.py overlay)
+# ------------------------------------------------------------
+def get_attractors_snapshot() -> List[Dict[str, Any]]:
+    """
+    Returns a list of per-shape snapshots. Each item:
+      {
+        "shape": (H, W) or (X,),
+        "items": [
+          {"id": int, "pos": (y,x), "theta": float, "r_par": float, "r_perp": float,
+           "amp": float, "age": int, "alive": bool}
+        ]
+      }
+    Only 2-D shapes (option-B) emit items.
+    """
+    snaps: List[Dict[str, Any]] = []
+    for shape, st in list(_STATES.items()):
+        try:
+            entry: Dict[str, Any] = {"shape": tuple(shape), "items": []}
+            if getattr(st, "ndim", 0) == 2 and hasattr(st, "attractors"):
+                for a in st.attractors:
+                    entry["items"].append({
+                        "id": int(getattr(a, "id", -1)),
+                        "pos": tuple(getattr(a, "pos", (0, 0))),
+                        "theta": float(getattr(a, "theta", 0.0)),
+                        "r_par": float(getattr(a, "r_par", 1.0)),
+                        "r_perp": float(getattr(a, "r_perp", 1.0)),
+                        "amp": float(getattr(a, "amp", 0.0)),
+                        "age": int(getattr(a, "age", 0)),
+                        "alive": bool(getattr(a, "alive", True)),
+                    })
+            snaps.append(entry)
+        except Exception:
+            continue
+    return snaps
