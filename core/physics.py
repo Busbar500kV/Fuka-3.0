@@ -679,3 +679,7 @@ def get_attractors_snapshot() -> List[Dict[str, Any]]:
         except Exception:
             continue
     return snaps
+    
+def clear_states():
+    """Clear cached LocalState instances (fresh start)."""
+    _STATES.clear()
