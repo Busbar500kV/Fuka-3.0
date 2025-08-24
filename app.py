@@ -1,11 +1,12 @@
 from __future__ import annotations
 import json, os
 from copy import deepcopy
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, Tuple, List, Optional
 
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
+
 from core import physics
 from core.engine import Engine
 
@@ -173,7 +174,7 @@ else:
     env_opacity = float(vis.get("env_opacity", 1.0))
     sub_opacity = float(vis.get("sub_opacity", 0.85))
 
-# ---------- 3‑D connections UI (preloaded from defaults.json → conn_cfg) ----------
+# ---------- Connections UI ----------
 with st.sidebar.expander("3‑D Connections (substrate encoding)", expanded=True):
     conn_enable = st.checkbox("Show connections", value=bool(conn_cfg.get("enable", True)), key="conn:enable")
     conn_thr_env = st.slider("Env point threshold (norm)",
@@ -193,13 +194,23 @@ with st.sidebar.expander("3‑D Connections (substrate encoding)", expanded=True
     conn_max_edges = st.slider("Max edges plotted",
                                1000, 100000, int(conn_cfg.get("max_edges", max3d if max3d is not None else 40000)), 1000, key="conn:max")
 
+# ---------- Attractors UI (optional overlay; requires physics.get_attractors_snapshot) ----------
+with st.sidebar.expander("Attractors overlay (3‑D)", expanded=False):
+    attr_enable = st.checkbox("Show attractors (needs physics.get_attractors_snapshot)", value=False, key="attr:enable")
+    attr_scale  = st.slider("Glyph length scale", 0.1, 5.0, 1.0, 0.1, key="attr:scale")
+    attr_alpha  = st.slider("Opacity", 0.1, 1.0, 0.8, 0.05, key="attr:alpha")
+
+# ---------- Heatmap slice control ----------
+with st.sidebar.expander("2‑D heatmap slice", expanded=False):
+    hm_slice_y = st.slider("Y row (for 2‑D time × X view)", 0, max(0, int(cfg_default["env"]["height"]) - 1), int(cfg_default["env"]["height"]) // 2, 1)
+
 # ---------- Layout placeholders ----------
 st.title("Simulation")
 combo2d_ph = st.empty()
 energy_ph  = st.empty()
 stats_ph   = st.empty()
-points3d_ph  = st.empty()   # old point cloud (Env/Substrate)
-conn3d_ph    = st.empty()   # new connections view
+points3d_ph  = st.empty()   # env/substrate points
+conn3d_ph    = st.empty()   # connections + optional attractors
 
 # ---------- Plot helpers ----------
 def _norm(A: np.ndarray) -> np.ndarray:
@@ -224,10 +235,11 @@ def _resample_rows(M: np.ndarray, new_len: int) -> np.ndarray:
         out[t] = np.interp(x_tgt, x_src, M[t])
     return out
 
-def draw_combined_heatmap(ph, E_stack: np.ndarray, S_stack: np.ndarray, title="Env + Substrate (combined, zoomable)"):
+def draw_combined_heatmap(ph, E_stack: np.ndarray, S_stack: np.ndarray, y_row: int, title="Env + Substrate (combined, zoomable)"):
     E = E_stack; S = S_stack
-    if E.ndim == 3: E = E[:, E.shape[1] // 2, :]  # mid‑row slice
-    if S.ndim == 3: S = S[:, S.shape[1] // 2, :]
+    # pick a row for both env and substrate (full‑grid mode)
+    if E.ndim == 3: E = E[:, y_row, :]
+    if S.ndim == 3: S = S[:, y_row, :]
     if S.shape[1] != E.shape[1]:
         S_res = _resample_rows(S, E.shape[1])
     else:
@@ -365,9 +377,13 @@ def draw_3d_connections_over_time(ph, E_stack: np.ndarray, S_stack: np.ndarray,
                                   dvar_thr: float,
                                   energy_q: float,
                                   stride_t: int,
-                                  max_edges_total: int):
+                                  max_edges_total: int,
+                                  attr_overlay: bool = False,
+                                  attr_scale: float = 1.0,
+                                  attr_alpha: float = 0.8):
     """
     Env: dots. Substrate: time‑layered connections; each frame contributes segments at z=t.
+    Optionally overlays attractors if physics.get_attractors_snapshot() exists.
     """
     fig = go.Figure()
 
@@ -390,9 +406,8 @@ def draw_3d_connections_over_time(ph, E_stack: np.ndarray, S_stack: np.ndarray,
             keep = max(0, budget - len(xs_all))
             if keep <= 0:
                 break
-            # xs/ys/zs are in groups of 3: [x0, x1, None]
             triplets = len(xs) // 3
-            idx = np.random.choice(triplets, size=keep // 3, replace=False)
+            idx = np.random.choice(triplets, size=max(1, keep // 3), replace=False)
             xs_t = []; ys_t = []; zs_t = []
             for k in idx:
                 i = 3 * k
@@ -411,6 +426,48 @@ def draw_3d_connections_over_time(ph, E_stack: np.ndarray, S_stack: np.ndarray,
             line=dict(width=2),
             name="Substrate connections"
         ))
+
+    # Optional: attractor overlay (requires physics.get_attractors_snapshot)
+    if attr_overlay and hasattr(physics, "get_attractors_snapshot"):
+        try:
+            # Expect: list of dicts per shape; we pick the first (single shape run)
+            snap = physics.get_attractors_snapshot()
+            # normalize into a flat list of items with pos=(y,x), theta, r_par, amp
+            items = []
+            if isinstance(snap, list):
+                # if physics returns per-shape dicts
+                for entry in snap:
+                    arr = entry.get("items", [])
+                    for it in arr:
+                        items.append(it)
+            elif isinstance(snap, dict) and "items" in snap:
+                items = snap["items"]
+            # draw as short oriented line segments at z = last frame (so it doesn't spam every layer)
+            z0 = S_stack.shape[0] - 1
+            Xs, Ys, Zs = [], [], []
+            for it in items:
+                pos = it.get("pos", (0, 0))
+                y0, x0 = int(pos[0]), int(pos[1])
+                theta = float(it.get("theta", 0.0))
+                r_par = float(it.get("r_par", 1.0))
+                amp   = float(it.get("amp", 0.5))
+                # needle length ~ r_par * amp
+                L = max(0.2, r_par) * max(0.2, amp) * float(attr_scale)
+                dx = L * np.cos(theta)
+                dy = L * np.sin(theta)
+                Xs += [x0 - dx, x0 + dx, None]
+                Ys += [y0 - dy, y0 + dy, None]
+                Zs += [z0,      z0,      None]
+            if Xs:
+                fig.add_trace(go.Scatter3d(
+                    x=np.array(Xs), y=np.array(Ys), z=np.array(Zs),
+                    mode="lines",
+                    line=dict(width=4),
+                    opacity=float(attr_alpha),
+                    name="Attractors"
+                ))
+        except Exception as e:
+            st.info(f"Attractor overlay unavailable ({e}). Continue without it.")
 
     fig.update_layout(
         title="3‑D: Env dots + Substrate connections over time",
@@ -498,8 +555,9 @@ if st.button("Run / Rerun", use_container_width=True):
             st.exception(e)
             st.stop()
 
-        # 2‑D overlays
-        draw_combined_heatmap(combo2d_ph, E_stack, S_stack)
+        # 2‑D overlays (choose slice)
+        y_pick = int(np.clip(hm_slice_y, 0, S_stack.shape[1]-1))
+        draw_combined_heatmap(combo2d_ph, E_stack, S_stack, y_row=y_pick)
 
         # Energy & stats
         draw_energy_timeseries(energy_ph, t_series, e_cell_series, e_env_series, e_flux_series)
@@ -507,7 +565,6 @@ if st.button("Run / Rerun", use_container_width=True):
 
         # Optional: legacy 3‑D points view (env + substrate points)
         if (thr3d is not None) and (max3d is not None):
-            # Build a quick points-only figure for parity
             fig_pts = go.Figure()
             # env
             _draw_3d_env_points(fig_pts, E_stack, thr=float(thr3d), portion=0.25)
@@ -528,7 +585,7 @@ if st.button("Run / Rerun", use_container_width=True):
         else:
             st.warning("3‑D points view disabled: add 'thr3d' and 'max3d' to defaults.json to enable.")
 
-        # New: 3‑D connections (per‑frame layers), using the *current* slider values
+        # New: 3‑D connections (per‑frame layers) + optional attractors
         if conn_enable and (conn_max_edges is not None):
             draw_3d_connections_over_time(
                 conn3d_ph,
@@ -541,6 +598,9 @@ if st.button("Run / Rerun", use_container_width=True):
                 energy_q=float(conn_energy_q),
                 stride_t=int(conn_stride_t),
                 max_edges_total=int(conn_max_edges),
+                attr_overlay=bool(attr_enable),
+                attr_scale=float(attr_scale),
+                attr_alpha=float(attr_alpha),
             )
         else:
             st.info("Connections view is off. Enable it in the sidebar.")
