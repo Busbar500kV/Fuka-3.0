@@ -2,12 +2,14 @@
   "seed": 0,
   "frames": 500,
   "space": 32,
+
   "k_flux": 0.6,
   "k_motor": 0.05,
   "diffuse": 0.05,
   "decay": 0.05,
   "band": 3,
   "bc": "reflect",
+
   "env": {
     "length": 80,
     "height": 80,
@@ -45,16 +47,20 @@
       }
     ]
   },
+
   "chunk": 25,
   "live": false,
+
   "thr3d": 0.1,
   "max3d": 40000,
+
   "vis": {
     "heat_floor": 0.0,
     "heat_gamma": 1.0,
     "env_opacity": 1.0,
     "sub_opacity": 0.85
   },
+
   "connections": {
     "enable": true,
     "thr_env": 0.1,
@@ -64,8 +70,15 @@
     "dvar_threshold": 0.0001,
     "energy_quantile": 0.70,
     "stride_t": 4,
-    "max_edges": 40000
+    "max_edges": 40000,
+    "render": {
+      "draw_in_3d": true,
+      "edge_width": 2.0,
+      "opacity": 0.9,
+      "color_mode": "by_entropy_drop"
+    }
   },
+
   "physics": {
     "alpha_speed": 0.90,
     "beta_speed": 1.00,
@@ -74,7 +87,23 @@
     "update_mode": "random",
     "T": 0.0001
   },
+
   "fuka3": {
+    "ema": {
+      "tau_var_fast": 4,
+      "tau_var_slow": 32,
+      "tau_muE": 8
+    },
+    "tiles": {
+      "tile_size": 8
+    },
+    "bank": {
+      "alpha_uptake": 1.0,
+      "cost_work_coeff": 1.0,
+      "leak": 0.02,
+      "Bmin": 0.0,
+      "sigma_B": 0.25
+    },
     "energy": {
       "source_rate": 0.1,
       "transport_conductance": 0.15,
@@ -108,17 +137,68 @@
       "gradient_clip": 1.0
     },
     "attractors": {
-      "spawn_prob": 0.01,
+      "spawn_prob_base": 0.003,
+      "spawn_bias_env_weight": 0.6,
       "spawn_energy": 0.05,
-      "maint_cost_rate": 0.001,
-      "decay_rate": 0.01,
       "amplitude_init": 0.05,
       "amplitude_min": 0.005,
-      "radius": 1,
-      "eta_amplitude": 0.10,
-      "sigma_theta": 0.5,
-      "sigma_signal": 0.5,
-      "propagate_energy": 0.05
+      "amplitude_max": 0.5,
+      "maint_cost_rate": 0.001,
+      "bank_leak": 0.02,
+      "decay_rate": 0.01,
+      "shape": {
+        "r_parallel_range": [2.0, 6.0],
+        "r_perp_range": [1.0, 3.0],
+        "theta_jitter": 0.3
+      },
+      "influence": {
+        "c_theta_rho": 0.5,
+        "c_theta_H": 0.5,
+        "c_alpha": 0.25,
+        "c_beta": 0.25,
+        "birth_multiplier_kappa": 0.5
+      },
+      "fitness_weights": {
+        "w_H": 0.30,
+        "w_kappa": 0.20,
+        "w_xi": 0.20,
+        "w_r": 0.15,
+        "w_p": 0.05,
+        "w_b": 0.05,
+        "w_o": 0.10,
+        "w_c": 0.05
+      },
+      "survival": {
+        "alpha_s": 8.0,
+        "theta_s": 0.5
+      },
+      "absorption": {
+        "alpha_a": 6.0,
+        "beta_a": 4.0,
+        "gamma_a": 4.0,
+        "theta_abs": 0.6,
+        "rho_abs": 1.05,
+        "U_min": 0.2,
+        "L_consec": 5,
+        "engrave_cool_beta": 0.2,
+        "engrave_weight_gain": 0.1
+      },
+      "overlap": {
+        "Omega_ref": 0.5
+      },
+      "render": {
+        "show_blobs": true,
+        "blob_opacity": 0.35,
+        "blob_stride_frames": 5
+      },
+      "legacy": {
+        "spawn_prob": 0.01,
+        "radius": 1,
+        "eta_amplitude": 0.10,
+        "sigma_theta": 0.5,
+        "sigma_signal": 0.5,
+        "propagate_energy": 0.05
+      }
     },
     "integration": {
       "sigma_theta": 0.5,
