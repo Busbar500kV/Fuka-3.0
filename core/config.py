@@ -1,91 +1,165 @@
-# core/config.py
+# core/engine.py
 from __future__ import annotations
-from dataclasses import dataclass, asdict, field
-from typing import List, Dict, Any
+import numpy as np
+from typing import Dict, Any, Tuple
+from dataclasses import is_dataclass, asdict  # <-- NEW
 
-# ---- Environment (1D if height==1; 2D if height>1) ----
-@dataclass
-class FieldCfg:
-    length: int = 512
-    frames: int = 1000
-    noise_sigma: float = 0.01
-    height: int = 1  # if >1 => E[t, y, x], else E[t, x]
-    sources: List[Dict[str, Any]] = field(default_factory=lambda: [
-        {"kind": "moving_peak", "amp": 1.0, "speed": 0.0, "width": 4.0, "start": 100}
-    ])
+from . import physics
+from .metrics import collect, format_for_log  # optional logging
 
-# ---- Top-level config for the engine ----
-@dataclass
-class Config:
-    seed: int = 0
-    frames: int = 5000
-    space: int = 64
-
-    # Classic knobs (still supported explicitly)
-    k_flux: float = 0.05
-    k_motor: float = 0.20
-    diffuse: float = 0.05
-    decay: float = 0.01
-    band: int = 3
-    bc: str = "reflect"  # "periodic" | "reflect" | "absorb" | "wall"
-
-    # Any extra physics parameters are passed verbatim to step_physics
-    physics: Dict[str, Any] = field(default_factory=dict)
-
-    env: FieldCfg = field(default_factory=FieldCfg)
-
-def default_config() -> Dict[str, Any]:
+def _config_to_dict(cfg_obj: Any) -> Dict[str, Any]:
     """
-    Conservative baseline (unused when the app runs strictly from defaults.json).
-    Provided so other entry points/tests can still import a sane default dict.
+    Accept either a plain dict, a dataclass (including nested dataclasses),
+    or an object with to_dict/as_dict/dict/toJSON, and return a plain dict.
     """
-    return asdict(Config())
+    # 1) Already a dict?
+    if isinstance(cfg_obj, dict):
+        return cfg_obj
 
-# Hints for physics keys that may appear at top-level in defaults.json
-# (We hoover them into the physics dict for backward compatibility.)
-_PHYS_HINTS = {
-    "alpha_speed",
-    "beta_speed",
-    "flux_limit",
-    "T",
-    "update_mode",
-    "boundary_leak",
-}
+    # 2) Dataclass (handles nested dataclasses too)
+    if is_dataclass(cfg_obj):
+        try:
+            return asdict(cfg_obj)
+        except Exception:
+            pass  # fall through
 
-def make_config_from_dict(d: Dict[str, Any]) -> Config:
-    # ---- env ----
-    env_d = dict(d.get("env", {}))
-    height = int(env_d.get("height", env_d.get("H", 1)))
-    fcfg = FieldCfg(
-        length=int(env_d.get("length", 512)),
-        frames=int(env_d.get("frames", d.get("frames", 5000))),
-        noise_sigma=float(env_d.get("noise_sigma", 0.01)),
-        height=height,
-        sources=env_d.get("sources", FieldCfg().sources),
+    # 3) Common adapters on arbitrary objects
+    for attr in ("to_dict", "as_dict", "dict", "toJSON"):
+        if hasattr(cfg_obj, attr) and callable(getattr(cfg_obj, attr)):
+            try:
+                out = getattr(cfg_obj, attr)()
+                if isinstance(out, dict):
+                    return out
+            except Exception:
+                pass
+
+    # 4) Shallow attribute dict (last resort)
+    if hasattr(cfg_obj, "__dict__") and isinstance(cfg_obj.__dict__, dict):
+        out = {k: v for k, v in cfg_obj.__dict__.items() if not k.startswith("_")}
+        # If env is a dataclass here, convert it too so Engine sees a dict
+        if "env" in out and is_dataclass(out["env"]):
+            out["env"] = asdict(out["env"])
+        return out
+
+    raise TypeError(
+        "Engine expected a dict-like config. Got type "
+        f"{type(cfg_obj).__name__} without a supported conversion."
     )
 
-    # ---- bc normalization ----
-    bc = str(d.get("bc", "reflect")).lower()
-    if bc not in ("periodic", "reflect", "absorb", "wall"):
-        bc = "reflect"
+class Engine:
+    def __init__(self, cfg: Any):
+        # ---- normalize config to a dict ----
+        cfg = _config_to_dict(cfg)
+        self.cfg = cfg
+        self.rng = np.random.default_rng(int(cfg.get("seed", 0)))
 
-    # ---- collect physics kwargs ----
-    physics_block = dict(d.get("physics", {}))  # optional nested block
-    # also sweep top-level for hinted keys (legacy/back-compat)
-    for k in _PHYS_HINTS:
-        if k in d and k not in physics_block:
-            physics_block[k] = d[k]
+        # --- sim dims / UI knobs (unchanged)
+        self.frames = int(cfg.get("frames", 2000))
+        self.space  = int(cfg.get("space", 64))
+        self.k_flux   = float(cfg.get("k_flux", 0.08))
+        self.k_motor  = float(cfg.get("k_motor", 0.20))
+        self.diffuse  = float(cfg.get("diffuse", 0.05))
+        self.decay    = float(cfg.get("decay", 0.05))
+        self.band     = int(cfg.get("band", 3))
+        self.bc       = str(cfg.get("bc", "reflect"))
 
-    return Config(
-        seed=int(d.get("seed", 0)),
-        frames=int(d.get("frames", 5000)),
-        space=int(d.get("space", 64)),
-        k_flux=float(d.get("k_flux", 0.05)),
-        k_motor=float(d.get("k_motor", 0.20)),
-        diffuse=float(d.get("diffuse", 0.05)),
-        decay=float(d.get("decay", 0.01)),
-        band=int(d.get("band", 3)),
-        bc=bc,
-        physics=physics_block,  # <- Engine forwards this to step_physics(**physics)
-        env=fcfg,
-    )
+        # physics & fuka3 config blocks (pass through)
+        self.physics_cfg = dict(cfg.get("physics", {}))
+        self.fuka3_cfg   = dict(cfg.get("fuka3", {}))
+
+        # --- substrate & environment (2D)
+        H = W = self.space
+        self.S = np.zeros((H, W), dtype=float)
+
+        # Environment config (now reliably a dict)
+        self.env_cfg = cfg.get("env", {}) if isinstance(cfg.get("env", {}), dict) else {}
+        self.env_H = int(self.env_cfg.get("height", H))
+        self.env_W = int(self.env_cfg.get("length", W))
+        self.env_frames = int(self.env_cfg.get("frames", self.frames))
+        self.env_sigma  = float(self.env_cfg.get("noise_sigma", 0.0))
+        self.env_sources = self.env_cfg.get("sources", [])
+
+        # runtime counters
+        self.frame_idx = 0
+
+    # ---------- Simple synthetic environment to match your JSON ----------
+    def _env_field(self, t: int) -> np.ndarray:
+        H, W = self.env_H, self.env_W
+        E = np.zeros((H, W), dtype=float)
+
+        def add_peak_2d(amp, cx, cy, wx, wy):
+            y, x = np.indices((H, W))
+            E[:] += amp * np.exp(-((x - cx) ** 2) / (2 * wx * wx) - ((y - cy) ** 2) / (2 * wy * wy))
+
+        for src in self.env_sources:
+            kind = src.get("kind", "moving_peak_2d")
+            if kind == "moving_peak_2d":
+                amp = float(src.get("amp", 1.0))
+                vx  = float(src.get("speed_x", 0.0))
+                vy  = float(src.get("speed_y", 0.0))
+                wx  = float(src.get("width_x", 6.0))
+                wy  = float(src.get("width_y", 6.0))
+                sx  = float(src.get("start_x", W//2))
+                sy  = float(src.get("start_y", H//2))
+                cx  = (sx + vx * t) % W
+                cy  = (sy + vy * t) % H
+                add_peak_2d(amp, cx, cy, wx, wy)
+
+            elif kind == "moving_peak":
+                amp = float(src.get("amp", 0.6))
+                v   = float(src.get("speed", 0.02))
+                w   = float(src.get("width", 5.0))
+                start = float(src.get("start", W//2))
+                y_center = src.get("y_center", "mid")
+                wy = float(src.get("width_y", 18.0))
+                cx = (start + v * t) % W
+                cy = H//2 if y_center == "mid" else float(y_center)
+                y, x = np.indices((H, W))
+                E += amp * np.exp(-((x - cx) ** 2) / (2 * w * w)) * np.exp(-((y - cy) ** 2) / (2 * wy * wy))
+
+        if self.env_sigma > 0.0:
+            E += self.env_sigma * self.rng.standard_normal(size=E.shape)
+
+        if (H, W) != self.S.shape:
+            E = physics._resample_2d(E, self.S.shape)
+        return E
+
+    # ---------- One simulation step ----------
+    def step(self) -> Tuple[np.ndarray, float, np.ndarray]:
+        E = self._env_field(self.frame_idx)
+
+        S_next, flux = physics.step_physics(
+            self.S, E,
+            self.k_flux, self.k_motor, self.diffuse, self.decay, self.rng,
+            band=self.band, bc=self.bc,
+            # legacy physics knobs (UI preserved)
+            T=self.physics_cfg.get("T", 0.001),
+            flux_limit=self.physics_cfg.get("flux_limit", 0.20),
+            boundary_leak=self.physics_cfg.get("boundary_leak", 0.01),
+            update_mode=self.physics_cfg.get("update_mode", "random"),
+            # NEW: full Fuka 3.0 block
+            fuka3=self.fuka3_cfg,
+        )
+
+        self.S = S_next
+        self.frame_idx += 1
+        return self.S, flux, E
+
+    # ---------- Optional: log metrics every N frames ----------
+    def maybe_log_metrics(self, N: int = 10):
+        if (self.frame_idx % N) == 0:
+            try:
+                rows = collect()
+                print(format_for_log(rows))
+            except Exception:
+                pass  # never crash sim on logging
+
+# Convenience runner (optional; unused by app.py but kept for parity)
+def run(cfg: Any, on_frame=None):
+    eng = Engine(cfg)
+    for _ in range(eng.frames):
+        S, flux, E = eng.step()
+        if on_frame is not None:
+            on_frame(eng.frame_idx, S, E, flux)
+        eng.maybe_log_metrics(10)
+    return eng
