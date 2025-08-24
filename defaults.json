@@ -9,8 +9,8 @@
   "band": 3,
   "bc": "reflect",
   "env": {
-    "length": 256,
-    "height": 256,
+    "length": 80,
+    "height": 80,
     "frames": 500,
     "noise_sigma": 0.01,
     "sources": [
