@@ -155,12 +155,14 @@ had_chunk = "chunk" in user_cfg
 had_thr3d = "thr3d" in user_cfg
 had_max3d = "max3d" in user_cfg
 had_vis   = "vis"   in user_cfg
+had_conn  = "connections" in user_cfg
 
 live  = bool(user_cfg.pop("live",  True))   if had_live  else None
 chunk = int(user_cfg.pop("chunk",  150))    if had_chunk else None
 thr3d = float(user_cfg.pop("thr3d", 0.75))  if had_thr3d else None
 max3d = int(user_cfg.pop("max3d",  40000))  if had_max3d else None
 vis   = user_cfg.pop("vis", {})             if had_vis   else None
+conn_cfg = user_cfg.pop("connections", {})  if had_conn  else {}
 
 # Visual knobs for 2‑D heatmap
 if vis is None:
@@ -171,17 +173,25 @@ else:
     env_opacity = float(vis.get("env_opacity", 1.0))
     sub_opacity = float(vis.get("sub_opacity", 0.85))
 
-# ---------- New: 3‑D connections UI ----------
+# ---------- 3‑D connections UI (preloaded from defaults.json → conn_cfg) ----------
 with st.sidebar.expander("3‑D Connections (substrate encoding)", expanded=True):
-    conn_enable = st.checkbox("Show connections", value=True, key="conn:enable")
-    conn_thr_env = st.slider("Env point threshold (norm)", 0.0, 1.0, float(thr3d if thr3d is not None else 0.1), 0.01, key="conn:thr_env")
-    conn_base_win = st.slider("Baseline window (frames)", 8, 256, 64, 1, key="conn:base")
-    conn_eval_win = st.slider("Evaluation window (frames)", 8, 256, 64, 1, key="conn:eval")
-    conn_corr_thr = st.slider("Neighbour time-corr threshold", 0.0, 1.0, 0.6, 0.01, key="conn:corr")
-    conn_dvar_thr = st.slider("Variance drop Δ threshold", 0.0, 1e-2, 1e-4, 1e-5, key="conn:dvar")
-    conn_energy_q = st.slider("Energy floor (quantile)", 0.0, 1.0, 0.70, 0.01, key="conn:q")
-    conn_stride_t = st.slider("Time stride for connections", 1, 20, 4, 1, key="conn:stride")
-    conn_max_edges = st.slider("Max edges plotted", 1000, 100000, int(max3d if max3d is not None else 40000), 1000, key="conn:max")
+    conn_enable = st.checkbox("Show connections", value=bool(conn_cfg.get("enable", True)), key="conn:enable")
+    conn_thr_env = st.slider("Env point threshold (norm)",
+                             0.0, 1.0, float(conn_cfg.get("thr_env", thr3d if thr3d is not None else 0.1)), 0.01, key="conn:thr_env")
+    conn_base_win = st.slider("Baseline window (frames)",
+                              8, 256, int(conn_cfg.get("base_window", 64)), 1, key="conn:base")
+    conn_eval_win = st.slider("Evaluation window (frames)",
+                              8, 256, int(conn_cfg.get("eval_window", 64)), 1, key="conn:eval")
+    conn_corr_thr = st.slider("Neighbour time-corr threshold",
+                              0.0, 1.0, float(conn_cfg.get("corr_threshold", 0.6)), 0.01, key="conn:corr")
+    conn_dvar_thr = st.slider("Variance drop Δ threshold",
+                              0.0, 1e-2, float(conn_cfg.get("dvar_threshold", 1e-4)), 1e-5, key="conn:dvar")
+    conn_energy_q = st.slider("Energy floor (quantile)",
+                              0.0, 1.0, float(conn_cfg.get("energy_quantile", 0.70)), 0.01, key="conn:q")
+    conn_stride_t = st.slider("Time stride for connections",
+                              1, 20, int(conn_cfg.get("stride_t", 4)), 1, key="conn:stride")
+    conn_max_edges = st.slider("Max edges plotted",
+                               1000, 100000, int(conn_cfg.get("max_edges", max3d if max3d is not None else 40000)), 1000, key="conn:max")
 
 # ---------- Layout placeholders ----------
 st.title("Simulation")
@@ -216,7 +226,7 @@ def _resample_rows(M: np.ndarray, new_len: int) -> np.ndarray:
 
 def draw_combined_heatmap(ph, E_stack: np.ndarray, S_stack: np.ndarray, title="Env + Substrate (combined, zoomable)"):
     E = E_stack; S = S_stack
-    if E.ndim == 3: E = E[:, E.shape[1] // 2, :]
+    if E.ndim == 3: E = E[:, E.shape[1] // 2, :]  # mid‑row slice
     if S.ndim == 3: S = S[:, S.shape[1] // 2, :]
     if S.shape[1] != E.shape[1]:
         S_res = _resample_rows(S, E.shape[1])
@@ -298,9 +308,9 @@ def _select_edges_windowed(S_stack: np.ndarray,
                            energy_q: float):
     """
     At time t_end, compare variance in [t_end-eval_win+1, t_end] to baseline
-    variance in the window immediately before: [t_end-eval_win-base_win+1, ..., t_end-eval_win].
-    Return arrays of line segments (xs, ys, zs) at z=t_end for edges that satisfy:
-      - neighbour time-corr >= corr_thr over the eval window
+    window [t_end-eval_win-base_win+1, ..., t_end-eval_win].
+    Return line segments at z=t_end for edges passing:
+      - neighbour time-corr >= corr_thr over eval window
       - variance dropped by >= dvar_thr at both endpoints
       - mean |S| over eval window above energy quantile floor
     """
@@ -377,16 +387,15 @@ def draw_3d_connections_over_time(ph, E_stack: np.ndarray, S_stack: np.ndarray,
         if xs.size == 0:
             continue
         if len(xs_all) + len(xs) > budget:
-            # trim this frame's segments to fit budget
             keep = max(0, budget - len(xs_all))
             if keep <= 0:
                 break
-            idx = np.random.choice(len(xs)//3, size=keep//3, replace=False)  # triplets + None-separators
-            # rebuild trimmed arrays
+            # xs/ys/zs are in groups of 3: [x0, x1, None]
+            triplets = len(xs) // 3
+            idx = np.random.choice(triplets, size=keep // 3, replace=False)
             xs_t = []; ys_t = []; zs_t = []
-            # triplets grouped as [x0, x1, None], etc.
             for k in idx:
-                i = 3*k
+                i = 3 * k
                 xs_t += [xs[i], xs[i+1], None]
                 ys_t += [ys[i], ys[i+1], None]
                 zs_t += [zs[i], zs[i+1], None]
@@ -492,17 +501,19 @@ if st.button("Run / Rerun", use_container_width=True):
         # 2‑D overlays
         draw_combined_heatmap(combo2d_ph, E_stack, S_stack)
 
-        # Basic energy & stats
+        # Energy & stats
         draw_energy_timeseries(energy_ph, t_series, e_cell_series, e_env_series, e_flux_series)
         draw_stats_timeseries(stats_ph, t_series, entropy_series, variance_series, total_mass_series)
 
-        # Old 3‑D point cloud (optional; keeps parity)
+        # Optional: legacy 3‑D points view (env + substrate points)
         if (thr3d is not None) and (max3d is not None):
+            # Build a quick points-only figure for parity
             fig_pts = go.Figure()
             # env
             _draw_3d_env_points(fig_pts, E_stack, thr=float(thr3d), portion=0.25)
             # substrate points
-            Sn = _norm_local(S_stack if S_stack.ndim == 3 else S_stack[:, None, :])
+            Sn_full = S_stack if S_stack.ndim == 3 else S_stack[:, None, :]
+            Sn = _norm_local(Sn_full)
             tS, yS, xS = np.where(Sn >= float(thr3d))
             nS = len(xS)
             if nS > 0:
@@ -510,14 +521,15 @@ if st.button("Run / Rerun", use_container_width=True):
                 idx = np.random.choice(nS, size=keep, replace=False)
                 xS, yS, tS = xS[idx], yS[idx], tS[idx]
             fig_pts.add_trace(go.Scatter3d(x=xS, y=yS, z=tS, mode="markers", marker=dict(size=2, opacity=0.8), name="Substrate"))
-            fig_pts.update_layout(title="Sparse 3‑D energy (points)", scene=dict(xaxis_title="x", yaxis_title="y", zaxis_title="t"),
+            fig_pts.update_layout(title="Sparse 3‑D energy (points)",
+                                  scene=dict(xaxis_title="x", yaxis_title="y", zaxis_title="t"),
                                   height=540, template="plotly_dark", showlegend=True)
             points3d_ph.plotly_chart(fig_pts, use_container_width=True, theme=None, key=new_key("combo3d"))
         else:
             st.warning("3‑D points view disabled: add 'thr3d' and 'max3d' to defaults.json to enable.")
 
-        # New 3‑D connections (per‑frame layers)
-        if conn_enable and (max3d is not None):
+        # New: 3‑D connections (per‑frame layers), using the *current* slider values
+        if conn_enable and (conn_max_edges is not None):
             draw_3d_connections_over_time(
                 conn3d_ph,
                 E_stack, S_stack,
