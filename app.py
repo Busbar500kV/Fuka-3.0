@@ -332,7 +332,7 @@ if st.button("Run / Rerun", use_container_width=True):
             t_series.append(step_idx)
 
             rows = physics.get_fuka3_metrics()
-            if metrics_rows:
+            if rows:
                 m0 = rows[0]
                 e_cell = float(m0["free_energy_total"] + m0["bound_energy_total"])
                 ent = float(m0["entropy_mean"])
