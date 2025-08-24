@@ -7,6 +7,7 @@ from typing import Any, Dict, Tuple, List
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
+from core import physics
 
 # from core.config import make_config_from_dict
 from core.engine import Engine
@@ -330,9 +331,9 @@ if st.button("Run / Rerun", use_container_width=True):
             sub_frames.append(S.copy())
             t_series.append(step_idx)
 
-            metrics_rows = collect_metrics()
+            rows = physics.get_fuka3_metrics()
             if metrics_rows:
-                m0 = metrics_rows[0]
+                m0 = rows[0]
                 e_cell = float(m0["free_energy_total"] + m0["bound_energy_total"])
                 ent = float(m0["entropy_mean"])
             else:
