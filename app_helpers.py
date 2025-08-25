@@ -283,47 +283,64 @@ def _select_edges_windowed(S_stack: np.ndarray,
         xs += [xx,   xx, None]; ys += [yy, yy+1, None]; zs += [z,  z,  None]
     return np.array(xs), np.array(ys), np.array(zs)
 
-def draw_3d_connections_over_time(ph, E_stack: np.ndarray, S_stack: np.ndarray,
-                                  thr_env: float,
-                                  base_win: int,
-                                  eval_win: int,
-                                  corr_thr: float,
-                                  dvar_thr: float,
-                                  energy_q: float,
-                                  stride_t: int,
-                                  max_edges_total: int,
-                                  attr_overlay: bool,
-                                  attr_scale: float,
-                                  attr_alpha: float,
-                                  get_attractor_items_fn,
-                                  new_key_fn):
+def draw_3d_connections_over_time(
+    ph,
+    E_stack: np.ndarray,
+    S_stack: np.ndarray,
+    thr_env: float,
+    base_win: int,
+    eval_win: int,
+    corr_thr: float,
+    dvar_thr: float,
+    energy_q: float,
+    stride_t: int,
+    max_edges_total: int,
+    attr_overlay: bool,
+    attr_scale: float,
+    attr_alpha: float,
+    get_attractor_items_fn,
+    new_key_fn,                      # kept for backward-compat (not used)
+    *,
+    camera: Optional[dict] = None,   # <— NEW: provide a camera dict to lock the view
+    uirevision: str = "conn3d"       # <— persist state between reruns
+):
+    """
+    Draws Env dots + time-layered substrate connections in 3D.
+    Camera can be stabilized by passing a Plotly camera dict via `camera`.
+    """
     fig = go.Figure()
+
+    # Env dots (single pass)
     _draw_3d_env_points(fig, E_stack, thr=thr_env, portion=0.30, cap_pts=150000)
 
+    # Build connection segments across time with stride
     T, H, W = S_stack.shape
     xs_all, ys_all, zs_all = [], [], []
-    budget = max_edges_total
-    for t in range(base_win + eval_win - 1, T, max(1, stride_t)):
+    budget = int(max_edges_total)
+
+    for t in range(base_win + eval_win - 1, T, max(1, int(stride_t))):
         xs, ys, zs = _select_edges_windowed(
             S_stack, t_end=t,
-            base_win=base_win, eval_win=eval_win,
-            corr_thr=corr_thr, dvar_thr=dvar_thr, energy_q=energy_q
+            base_win=int(base_win), eval_win=int(eval_win),
+            corr_thr=float(corr_thr), dvar_thr=float(dvar_thr), energy_q=float(energy_q)
         )
         if xs.size == 0:
             continue
-        if len(xs_all) + len(xs) > budget:
+        if (len(xs_all) + len(xs)) > budget:
             keep = max(0, budget - len(xs_all))
             if keep <= 0:
                 break
+            # keep whole 3-point triplets
             triplets = len(xs) // 3
-            idx = np.random.choice(triplets, size=max(1, keep // 3), replace=False)
-            xs_t = []; ys_t = []; zs_t = []
-            for k in idx:
-                i = 3 * k
-                xs_t += [xs[i], xs[i+1], None]
-                ys_t += [ys[i], ys[i+1], None]
-                zs_t += [zs[i], zs[i+1], None]
-            xs, ys, zs = np.array(xs_t), np.array(ys_t), np.array(zs_t)
+            if triplets > 0:
+                idx = np.random.choice(triplets, size=max(1, keep // 3), replace=False)
+                xs_t = []; ys_t = []; zs_t = []
+                for k in idx:
+                    i = 3 * k
+                    xs_t += [xs[i], xs[i+1], None]
+                    ys_t += [ys[i], ys[i+1], None]
+                    zs_t += [zs[i], zs[i+1], None]
+                xs, ys, zs = np.array(xs_t), np.array(ys_t), np.array(zs_t)
         xs_all.append(xs); ys_all.append(ys); zs_all.append(zs)
 
     if xs_all:
@@ -331,7 +348,8 @@ def draw_3d_connections_over_time(ph, E_stack: np.ndarray, S_stack: np.ndarray,
         ys_all = np.concatenate(ys_all)
         zs_all = np.concatenate(zs_all)
         fig.add_trace(go.Scatter3d(
-            x=xs_all, y=ys_all, z=zs_all, mode="lines",
+            x=xs_all, y=ys_all, z=zs_all,
+            mode="lines",
             line=dict(width=2),
             name="Substrate connections"
         ))
@@ -364,29 +382,33 @@ def draw_3d_connections_over_time(ph, E_stack: np.ndarray, S_stack: np.ndarray,
         except Exception as e:
             st.info(f"Attractor overlay unavailable ({e}). Continue without it.")
 
+    # ——— Keep camera stable & prevent resets ———
     fig.update_layout(
-        # keeps camera, zoom, pan, and uirevision-aware properties stable
-        uirevision="conn3d", 
+        uirevision=uirevision,  # tells Plotly "don't reset view if this token doesn't change"
         scene=dict(
+            camera=(camera or {}),    # lock to a passed-in camera (or leave as-is)
+            aspectmode="data",
             xaxis_title="x", yaxis_title="y", zaxis_title="t",
-            aspectmode="data",         # prevents “squash” on resize
-            dragmode="orbit"           # default left-drag behavior
         ),
-        height=640,
         template="plotly_dark",
         showlegend=True,
+        height=640,
+        margin=dict(l=0, r=0, t=40, b=0),
     )
 
-    # Use a STABLE key + pass Plotly config for nicer interactions
+    # Use a STABLE key so Streamlit doesn't remount the widget
     ph.plotly_chart(
         fig,
         use_container_width=True,
         theme=None,
-        key="conn3d_plot",   # <- stable key (do NOT change per rerun)
-        config={
-            "scrollZoom": True,          # wheel / pinch to zoom
-            "displaylogo": False,
-            # optional: keep the bar lean
-            # "modeBarButtonsToRemove": ["toggleSpikelines"]
-        },
+        key="conn3d_plot",
+        config=dict(
+            scrollZoom=True,
+            displaylogo=False,
+            doubleClick="false",  # avoid accidental resets on double‑tap
+            modeBarButtonsToRemove=[
+                "resetCameraDefault3d", "resetCameraLastSave3d",
+                "autoScale", "toImage"
+            ],
+        ),
     )
