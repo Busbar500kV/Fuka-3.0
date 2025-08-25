@@ -1,7 +1,9 @@
+# app.py
 from __future__ import annotations
 import json, os
 from copy import deepcopy
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
+
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
@@ -9,20 +11,26 @@ import plotly.graph_objects as go
 from core import physics
 from core.engine import Engine
 
-from ui_camera import camera_controls
+# optional camera controls module (safe if unused)
+try:
+    from ui_camera import camera_controls  # noqa: F401
+except Exception:
+    camera_controls = None  # not required
 
-# helpers
+# helpers (your updated file with grid assertion)
 from app_helpers import (
     load_defaults_strict, find_missing,
     ensure_session_keys, new_key,
     render_object,
     draw_combined_heatmap, draw_energy_timeseries, draw_stats_timeseries,
     draw_3d_connections_over_time,
+    assert_equal_grids,  # <- you added this
 )
 
+# ---------------- Page ----------------
 st.set_page_config(page_title="Fuka 3.0 — Free‑Energy Simulation", layout="wide")
 
-# --- Config load & validate ---
+# ---------------- Config load & validate ----------------
 cfg_default = load_defaults_strict()
 missing_keys = find_missing(cfg_default)
 if missing_keys:
@@ -32,10 +40,10 @@ if missing_keys:
     )
     st.stop()
 
-# --- Session keys ---
+# ---------------- Session keys ----------------
 ensure_session_keys()
 
-# --- Sidebar: render config & light extras ---
+# ---------------- Sidebar: render config ----------------
 with st.sidebar:
     st.header("Configuration (from defaults.json)")
     user_cfg = render_object("", deepcopy(cfg_default))
@@ -43,7 +51,7 @@ with st.sidebar:
     if test_number:
         st.subheader(f"Test: {test_number}")
 
-# Optional UI knobs
+# Optional UI knobs (present only if in defaults.json)
 had_live  = "live"  in user_cfg
 had_chunk = "chunk" in user_cfg
 had_thr3d = "thr3d" in user_cfg
@@ -58,7 +66,7 @@ max3d = int(user_cfg.pop("max3d",  40000))  if had_max3d else None
 vis   = user_cfg.pop("vis", {})             if had_vis   else None
 conn_cfg = user_cfg.pop("connections", {})  if had_conn  else {}
 
-# Visual knobs
+# Visual knobs for 2‑D heatmap overlays
 if vis is None:
     heat_floor, heat_gamma, env_opacity, sub_opacity = 0.10, 1.0, 1.0, 0.85
 else:
@@ -67,7 +75,7 @@ else:
     env_opacity = float(vis.get("env_opacity", 1.0))
     sub_opacity = float(vis.get("sub_opacity", 0.85))
 
-# Connections UI
+# ---------------- Connections UI ----------------
 with st.sidebar.expander("3‑D Connections (substrate encoding)", expanded=True):
     conn_enable = st.checkbox("Show connections", value=bool(conn_cfg.get("enable", True)), key="conn:enable")
     conn_thr_env = st.slider("Env point threshold (norm)", 0.0, 1.0,
@@ -81,13 +89,13 @@ with st.sidebar.expander("3‑D Connections (substrate encoding)", expanded=True
     conn_max_edges = st.slider("Max edges plotted", 1000, 100000,
                                int(conn_cfg.get("max_edges", max3d if max3d is not None else 40000)), 1000, key="conn:max")
 
-# Attractors overlay UI
+# ---------------- Attractors overlay UI ----------------
 with st.sidebar.expander("Attractors overlay (3‑D)", expanded=False):
     attr_enable = st.checkbox("Show attractors (needs physics.get_attractors_snapshot)", value=False, key="attr:enable")
     attr_scale  = st.slider("Glyph length scale", 0.1, 5.0, 1.0, 0.1, key="attr:scale")
     attr_alpha  = st.slider("Opacity", 0.1, 1.0, 0.8, 0.05, key="attr:alpha")
 
-# Heatmap slice control
+# ---------------- Heatmap slice control ----------------
 with st.sidebar.expander("2‑D heatmap slice", expanded=False):
     hm_slice_y = st.slider(
         "Y row (for 2‑D time × X view)",
@@ -97,18 +105,43 @@ with st.sidebar.expander("2‑D heatmap slice", expanded=False):
         1,
     )
 
-# Layout placeholders
+# ---------------- Layout placeholders ----------------
 st.title("Simulation")
 combo2d_ph = st.empty()
 energy_ph  = st.empty()
 stats_ph   = st.empty()
-points3d_ph  = st.empty()
-conn3d_ph    = st.empty()
+points3d_ph  = st.empty()   # legacy points (we add initial-substrate box here)
+conn3d_ph    = st.empty()   # connections
 
-# ---------- Run ----------
+# ---------------- Utility: compute & draw initial substrate bounds ----------------
+def compute_init_bounds(H: int, W: int, space_side: int) -> Tuple[int, int, int, int]:
+    """
+    Returns (y0, y1, x0, x1) for the initial square of side `space_side`,
+    centered in an HxW grid. Inclusive indices.
+    """
+    s = int(max(1, min(space_side, H, W)))
+    y0 = (H - s) // 2
+    x0 = (W - s) // 2
+    y1 = y0 + s - 1
+    x1 = x0 + s - 1
+    return y0, y1, x0, x1
+
+def add_box_wireframe(fig: go.Figure, *, y0: int, y1: int, x0: int, x1: int, z: int = 0, name: str = "Init substrate bounds", opacity: float = 0.5):
+    """Adds a rectangular wireframe at plane z."""
+    xs = [x0, x1, x1, x0, x0]
+    ys = [y0, y0, y1, y1, y0]
+    zs = [z,  z,  z,  z,  z]
+    fig.add_trace(go.Scatter3d(
+        x=xs, y=ys, z=zs, mode="lines",
+        line=dict(width=3),
+        opacity=float(opacity),
+        name=name
+    ))
+
+# ---------------- Run ----------------
 if st.button("Run / Rerun", use_container_width=True):
     st.session_state["run_id"] += 1
-    for base in ("combo2d_count","energy_count","stats_count","combo3d_count","conn3d_count"):
+    for base in ("combo2d_count", "energy_count", "stats_count", "combo3d_count", "conn3d_count"):
         st.session_state[base] = 0
 
     physics.clear_states()           # fresh run
@@ -164,8 +197,8 @@ if st.button("Run / Rerun", use_container_width=True):
                 if (step_idx % 50) == 0:
                     tn = f"[{test_number}] " if test_number else ""
                     status.write(
-                        f"{tn}Frame {step_idx+1}/{T}  |  ⌀|S|={np.mean(np.abs(S)):.4f}  flux={flux:.5f}  "
-                        f"H_S={ent:.6g}"
+                        f"{tn}Frame {step_idx+1}/{T}  |  ⌀|S|={np.mean(np.abs(S)):.4f}  "
+                        f"flux={flux:.5f}  H_S={ent:.6g}"
                     )
     except Exception as e:
         ok = False
@@ -175,12 +208,15 @@ if st.button("Run / Rerun", use_container_width=True):
     if ok:
         prog.progress(100, text="Simulation complete")
         try:
-            E_stack = np.stack(env_frames, axis=0)
-            S_stack = np.stack(sub_frames, axis=0)
+            E_stack = np.stack(env_frames, axis=0)  # (T,H,W)
+            S_stack = np.stack(sub_frames, axis=0)  # (T,H,W)
         except Exception as e:
             st.exception(e); st.stop()
 
-        # 2‑D overlays
+        # --------- Enforce SAME grid for plotting (no resampling) ---------
+        T_chk, H_chk, W_chk = assert_equal_grids(E_stack, S_stack)
+
+        # --------- 2‑D overlays (combined heatmaps) ---------
         y_pick = int(np.clip(hm_slice_y, 0, S_stack.shape[1]-1))
         draw_combined_heatmap(
             combo2d_ph, E_stack, S_stack, y_row=y_pick,
@@ -189,26 +225,86 @@ if st.button("Run / Rerun", use_container_width=True):
             new_key_fn=new_key
         )
 
-        # Energy & stats
+        # --------- Energy & stats ---------
         draw_energy_timeseries(energy_ph, t_series, e_cell_series, e_env_series, e_flux_series, new_key)
         draw_stats_timeseries(stats_ph, t_series, entropy_series, variance_series, total_mass_series, new_key)
 
-        # ---------- Legacy 3‑D points (moved to helper) ----------
+        # --------- Legacy 3‑D points with INITIAL SUBSTRATE BOX ---------
         if (thr3d is not None) and (max3d is not None):
-            from app_helpers import draw_3d_points_legacy
-            draw_3d_points_legacy(
-                points3d_ph,
-                E_stack, S_stack,
-                thr_points=float(thr3d),
-                max_points_total=int(max3d),
+            fig_pts = go.Figure()
+
+            # --- Env points
+            # reuse helper's internal logic (copy pasted minimal here to avoid import cycling)
+            def _norm_local(A):
+                m, M = float(np.nanmin(A)), float(np.nanmax(A))
+                if not np.isfinite(m) or not np.isfinite(M) or M - m < 1e-12:
+                    return np.zeros_like(A)
+                return (A - m) / (M - m + 1e-12)
+
+            E3 = E_stack
+            if E3.ndim == 2:
+                E3 = E3[:, None, :]
+            En = _norm_local(E3)
+            tE, yE, xE = np.where(En >= float(thr3d))
+            if len(xE) > 0:
+                keep = int(max(1, 0.25 * min(len(xE), int(max3d))))
+                idx = np.random.choice(len(xE), size=keep, replace=False)
+                xE, yE, tE = xE[idx], yE[idx], tE[idx]
+            fig_pts.add_trace(go.Scatter3d(
+                x=xE, y=yE, z=tE, mode="markers",
+                marker=dict(size=2, opacity=0.55),
+                name="Env"
+            ))
+
+            # --- Substrate points
+            S3 = S_stack if S_stack.ndim == 3 else S_stack[:, None, :]
+            Sn = _norm_local(S3)
+            tS, yS, xS = np.where(Sn >= float(thr3d))
+            if len(xS) > 0:
+                keep = int(min(len(xS), int(max3d) // 2))
+                idx = np.random.choice(len(xS), size=keep, replace=False)
+                xS, yS, tS = xS[idx], yS[idx], tS[idx]
+            fig_pts.add_trace(go.Scatter3d(
+                x=xS, y=yS, z=tS, mode="markers",
+                marker=dict(size=2, opacity=0.8),
+                name="Substrate"
+            ))
+
+            # --- Initial substrate bounds (wireframe at z=0)
+            space_side = int(cfg_default.get("space", min(H_chk, W_chk)))
+            y0, y1, x0, x1 = compute_init_bounds(H_chk, W_chk, space_side)
+            add_box_wireframe(fig_pts, y0=y0, y1=y1, x0=x0, x1=x1, z=0, name="Init substrate (z=0)", opacity=0.6)
+
+            fig_pts.update_layout(
+                title="Sparse 3‑D energy (points) — with initial substrate bounds",
+                scene=dict(
+                    xaxis_title="x (grid index)", yaxis_title="y (grid index)", zaxis_title="t (frame)",
+                    aspectmode="data",
+                    dragmode="orbit",
+                ),
+                height=540,
+                template="plotly_dark",
+                showlegend=True,
+                uirevision="points3d",   # keep camera/zoom stable
+                margin=dict(l=0, r=0, t=40, b=0),
+            )
+
+            points3d_ph.plotly_chart(
+                fig_pts,
+                use_container_width=True,
+                theme=None,
+                key="points3d_plot",   # stable key
+                config={
+                    "scrollZoom": True,
+                    "displaylogo": False,
+                    "doubleClick": "false",
+                },
             )
         else:
             st.warning("3‑D points view disabled: add 'thr3d' and 'max3d' to defaults.json to enable.")
 
-        # ---------- 3‑D connections (helper) ----------
+        # --------- 3‑D connections (helper) ---------
         if conn_enable and (conn_max_edges is not None):
-            from app_helpers import draw_3d_connections_over_time
-
             def _get_attr_items():
                 if not hasattr(physics, "get_attractors_snapshot"):
                     return []
@@ -241,7 +337,7 @@ if st.button("Run / Rerun", use_container_width=True):
         else:
             st.info("Connections view is off. Enable it in the sidebar.")
 
-        # Copy‑paste run summary
+        # --------- Copy‑paste run summary ---------
         summary = {
             "test_number": test_number,
             "seed": int(engine.cfg.get("seed", 0)),
