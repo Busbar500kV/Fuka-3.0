@@ -74,6 +74,8 @@ def _num_step(v: float) -> float:
 def _float_slider_bounds(label: str, val: float) -> Tuple[float, float, float]:
     name = label.lower()
     step = round(_num_step(val), 6)
+    if step < 1e-6:
+        step = 1e-6
     if 0.0 <= val <= 1.0 or any(s in name for s in ["sigma", "noise", "decay", "diffuse", "k_", "thr", "threshold", "opacity", "gamma", "floor"]):
         lo, hi = 0.0, 1.0
         if val > 1.0:
