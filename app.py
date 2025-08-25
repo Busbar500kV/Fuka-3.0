@@ -543,8 +543,19 @@ if st.button("Run / Rerun", use_container_width=True):
             if T > 0:
                 pct = int(100 * (step_idx + 1) / T)
                 prog.progress(pct, text=f"Running simulation… {pct}%")
+                
                 if (step_idx % 50) == 0:
-                    status.write(f"Frame {step_idx+1}/{T}  |  ⌀|S|={np.mean(np.abs(S)):.4f}  flux={flux:.5f}")
+                    # pull diagnostics (safe even if keys are missing)
+                    rows = physics.get_fuka3_metrics()
+                    ent_S = ent_k = 0.0
+                    if rows:
+                        ent_S = float(rows[0].get("entropy_mean", 0.0))
+                        ent_k = float(rows[0].get("entropy_mean_kappa", 0.0))
+                    tn = f"[{test_number}] " if test_number else ""
+                    status.write(
+                        f"{tn}Frame {step_idx+1}/{T}  |  ⌀|S|={np.mean(np.abs(S)):.4f}  "
+                        f"flux={flux:.5f}  |  H_S={ent_S:.6g}  H_k={ent_k:.6g}"
+                    )
     except Exception as e:
         ok = False
         prog.empty()
@@ -610,3 +621,25 @@ if st.button("Run / Rerun", use_container_width=True):
             )
         else:
             st.info("Connections view is off. Enable it in the sidebar.")
+            
+            
+        # ---------- Copy‑paste run summary ----------
+        summary = {
+            "test_number": test_number,
+            "seed": int(engine.cfg.get("seed", 0)),
+            "frames": int(engine.cfg.get("frames", 0)),
+            "grid": [int(engine.env_H), int(engine.env_W)],
+            "E_env_mean": float(np.mean(e_env_series)) if e_env_series else 0.0,
+            "E_cell_final": float(e_cell_series[-1]) if e_cell_series else 0.0,
+            "flux_mean": float(np.mean(e_flux_series)) if e_flux_series else 0.0,
+            "entropy_mean_over_time": float(np.mean(entropy_series)) if entropy_series else 0.0,
+            "variance_mean_over_time": float(np.mean(variance_series)) if variance_series else 0.0,
+            "total_mass_final": float(total_mass_series[-1]) if total_mass_series else 0.0,
+        }
+        
+        st.markdown("### Run summary (copy/paste)")
+        st.text_area(
+            "Summary JSON",
+            value=json.dumps(summary, indent=2),
+            height=220,
+        )
