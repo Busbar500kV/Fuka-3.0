@@ -116,6 +116,7 @@ class LocalState:
         self.shape = shape
         self.ndim = len(shape)
         self.rng = rng
+        self.t_idx = 0
 
         # legacy physics knobs
         self.T_base = float(_safe_get(cfg_phys, "T", 0.001))
