@@ -551,7 +551,7 @@ def step_physics(
         return cur, flux_metric
 
     # 2‑D branch (Option‑B aware)
-    t_idx = rng.integers(0, 10**9)
+    
     gA, gf, gphi, gk, mism_x, mism_y = st._propose_grads_2d(t_idx, S, E)
     gA, gf, gphi, gk = st._boost_grads_with_attractors_2d(gA, gf, gphi, gk, S, E)
 
