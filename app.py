@@ -207,10 +207,31 @@ if st.button("Run / Rerun", use_container_width=True):
                 idx = np.random.choice(nS, size=keep, replace=False)
                 xS, yS, tS = xS[idx], yS[idx], tS[idx]
             fig_pts.add_trace(go.Scatter3d(x=xS, y=yS, z=tS, mode="markers", marker=dict(size=2, opacity=0.8), name="Substrate"))
-            fig_pts.update_layout(title="Sparse 3‑D energy (points)",
-                                  scene=dict(xaxis_title="x", yaxis_title="y", zaxis_title="t"),
-                                  height=540, template="plotly_dark", showlegend=True)
-            points3d_ph.plotly_chart(fig_pts, use_container_width=True, theme=None, key=new_key("combo3d"))
+            
+            fig_pts.update_layout(
+                title="Sparse 3‑D energy (points)",
+                scene=dict(
+                    xaxis_title="x", yaxis_title="y", zaxis_title="t",
+                    aspectmode="data",
+                    dragmode="orbit"
+                ),
+                height=540,
+                template="plotly_dark",
+                showlegend=True,
+                uirevision="points3d"
+            )
+            
+            points3d_ph.plotly_chart(
+                fig_pts,
+                use_container_width=True,
+                theme=None,
+                key="points3d_plot",            # <- stable key
+                config={
+                    "scrollZoom": True,
+                    "displaylogo": False
+                },
+            )
+            
         else:
             st.warning("3‑D points view disabled: add 'thr3d' and 'max3d' to defaults.json to enable.")
 
