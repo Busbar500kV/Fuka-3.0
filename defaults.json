@@ -1,11 +1,11 @@
 {
-  "test_number": "N-04",
+  "test_number": "N-05",
 
   "seed": 0,
   "frames": 500,
   "space": 32,
-  "k_flux": 0.45,
-  "k_motor": 0.06,
+  "k_flux": 0.50,
+  "k_motor": 0.08,
   "diffuse": 0.05,
   "decay": 0.05,
   "band": 3,
@@ -50,7 +50,7 @@
     "flux_limit": 0.20,
     "boundary_leak": 0.01,
     "update_mode": "random",
-    "T": 0.0012
+    "T": 0.0015
   },
 
   "fuka3": {
@@ -59,14 +59,14 @@
     "bank": { "alpha_uptake": 1.0, "cost_work_coeff": 1.0, "leak": 0.02, "Bmin": 0.0, "sigma_B": 0.25 },
 
     "energy": {
-      "source_rate": 0.20,
+      "source_rate": 0.22,
       "transport_conductance": 0.15,
       "work_to_dissipation_fraction": 1.0,
-      "step_cost_coeff": 0.005,
-      "alpha_energy_per_entropy": 0.02
+      "step_cost_coeff": 0.004,
+      "alpha_energy_per_entropy": 0.015
     },
 
-    "temperature": { "T0": 0.0012, "beta_bound": 0.015, "beta_signal": 0.40 },
+    "temperature": { "T0": 0.0012, "beta_bound": 0.015, "beta_signal": 0.25 },
 
     "connection": {
       "init": {
@@ -76,23 +76,23 @@
         "curvature_range": [0.00, 0.50],
         "plasticity_range": [0.01, 0.05]
       },
-      "learning": { "eta": 0.14, "entropy_window": 20, "entropy_kind": "variance", "flux_limit": 0.20 }
+      "learning": { "eta": 0.18, "entropy_window": 24, "entropy_kind": "variance", "flux_limit": 0.20 }
     },
 
-    "denoising": { "use_sinusoid_term": true, "kappa_scale": 0.9, "gradient_clip": 2.0 },
+    "denoising": { "use_sinusoid_term": true, "kappa_scale": 1.1, "gradient_clip": 3.0 },
 
     "attractors": {
-      "spawn_prob_base": 0.004,
-      "spawn_bias_env_weight": 0.6,
+      "spawn_prob_base": 0.010,
+      "spawn_bias_env_weight": 0.8,
       "spawn_energy": 0.05,
-      "amplitude_init": 0.06,
-      "amplitude_min": 0.005,
-      "amplitude_max": 0.5,
-      "maint_cost_rate": 0.001,
-      "bank_leak": 0.02,
-      "decay_rate": 0.012,
+      "amplitude_init": 0.12,
+      "amplitude_min": 0.004,
+      "amplitude_max": 0.8,
+      "maint_cost_rate": 0.0005,
+      "bank_leak": 0.005,
+      "decay_rate": 0.006,
       "shape": { "r_parallel_range": [2.0, 6.0], "r_perp_range": [1.0, 3.0], "theta_jitter": 0.3 },
-      "influence": { "c_theta_rho": 0.5, "c_theta_H": 0.5, "c_alpha": 0.25, "c_beta": 0.25, "birth_multiplier_kappa": 0.5 },
+      "influence": { "c_theta_rho": 0.7, "c_theta_H": 1.4, "c_alpha": 0.35, "c_beta": 0.35, "birth_multiplier_kappa": 0.8 },
       "fitness_weights": { "w_H": 0.30, "w_kappa": 0.20, "w_xi": 0.20, "w_r": 0.15, "w_p": 0.05, "w_b": 0.05, "w_o": 0.10, "w_c": 0.05 },
       "survival": { "alpha_s": 8.0, "theta_s": 0.5 },
       "absorption": { "alpha_a": 6.0, "beta_a": 4.0, "gamma_a": 4.0, "theta_abs": 0.6, "rho_abs": 1.05, "U_min": 0.2, "L_consec": 5, "engrave_cool_beta": 0.2, "engrave_weight_gain": 0.1 },
