@@ -492,6 +492,9 @@ def step_physics(
         if "T" in cfg_phys:
             st.T_base = float(cfg_phys["T"])
 
+    # >>> FIX: use persistent time index
+    t_idx = st.tick
+    
     # normalize for motor term
     Sn = S / (1e-12 + float(np.max(np.abs(S)))) if np.any(S) else np.zeros_like(S)
 
@@ -541,6 +544,10 @@ def step_physics(
         flux_metric = float(np.mean(np.abs(pull)))
         if not np.all(np.isfinite(cur)):
             cur = np.nan_to_num(cur, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # >>> advance time AFTER using t_idx for this step
+        st.tick += 1
+        
         return cur, flux_metric
 
     # 2‑D branch (Option‑B aware)
