@@ -1,7 +1,7 @@
 # app_helpers.py
 from __future__ import annotations
 import json, os
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, Tuple, List, Optional
 
 import numpy as np
 import plotly.graph_objects as go
