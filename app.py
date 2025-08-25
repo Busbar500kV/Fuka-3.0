@@ -643,3 +643,22 @@ if st.button("Run / Rerun", use_container_width=True):
             value=json.dumps(summary, indent=2),
             height=220,
         )
+
+
+from core.physics import get_fuka3_metrics, get_attractors_snapshot
+
+# After your sim loop:
+metrics = get_fuka3_metrics()
+attrs   = get_attractors_snapshot()
+
+summary = {
+    "test_number": user_cfg.get("test_number", "N/A"),
+    "frames": eng.frames,
+    "final_frame": eng.frame_idx,
+    "metrics": metrics,
+    "attractors": attrs
+}
+
+# Show in Streamlit UI
+st.subheader(f"Test summary (copy & paste below)")
+st.text_area("Summary", json.dumps(summary, indent=2), height=300)
