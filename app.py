@@ -114,7 +114,7 @@ def render_scalar(label: str, value: Any, path: str):
     if isinstance(value, int) and not isinstance(value, bool):
         lo, hi, step = _int_slider_bounds(label, int(value))
         v0 = int(np.clip(int(value), lo, hi))
-        return st.slider(label, min_value=int(lo), max_value=int(hi), value=v0, step=float(max(step, 1e-6)), key=key)
+        return st.slider(label, min_value=int(lo), max_value=int(hi), value=v0, step=int(step), key=key)
     if isinstance(value, float):
         lo, hi, step = _float_slider_bounds(label, float(value))
         v0 = float(np.clip(float(value), lo, hi))
