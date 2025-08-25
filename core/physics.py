@@ -500,9 +500,6 @@ def step_physics(
     t_idx = _GLOBAL_TICK
     _GLOBAL_TICK += 1
     
-    # >>> FIX: use persistent time index
-    t_idx = st.tick
-    
     # normalize for motor term
     Sn = S / (1e-12 + float(np.max(np.abs(S)))) if np.any(S) else np.zeros_like(S)
 
