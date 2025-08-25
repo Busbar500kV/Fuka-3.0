@@ -2,10 +2,10 @@
   "seed": 0,
   "frames": 500,
   "space": 32,
-  "k_flux": 0.45,
-  "k_motor": 0.05,
-  "diffuse": 0.05,
-  "decay": 0.06,
+  "k_flux": 0.50,
+  "k_motor": 0.03,
+  "diffuse": 0.06,
+  "decay": 0.07,
   "band": 3,
   "bc": "reflect",
 
@@ -13,7 +13,7 @@
     "length": 80,
     "height": 80,
     "frames": 500,
-    "noise_sigma": 0.010,
+    "noise_sigma": 0.012,
     "sources": [
       { "kind": "moving_peak_2d", "amp": 1.0, "speed_x": 0.0, "speed_y": 0.0, "width_x": 7.0, "width_y": 7.0, "start_x": 24, "start_y": 24 },
       { "kind": "moving_peak_2d", "amp": 0.9, "speed_x": 0.0, "speed_y": 0.0, "width_x": 9.0, "width_y": 9.0, "start_x": 56, "start_y": 28 },
@@ -32,11 +32,11 @@
   "connections": {
     "enable": true,
     "thr_env": 0.12,
-    "base_window": 48,
-    "eval_window": 48,
-    "corr_threshold": 0.50,
-    "dvar_threshold": 0.00005,
-    "energy_quantile": 0.40,
+    "base_window": 64,
+    "eval_window": 64,
+    "corr_threshold": 0.60,
+    "dvar_threshold": 0.00008,
+    "energy_quantile": 0.50,
     "stride_t": 3,
     "max_edges": 40000,
     "render": { "draw_in_3d": true, "edge_width": 2.0, "opacity": 0.9, "color_mode": "by_entropy_drop" }
@@ -45,10 +45,10 @@
   "physics": {
     "alpha_speed": 0.90,
     "beta_speed": 1.00,
-    "flux_limit": 0.25,
+    "flux_limit": 0.20,
     "boundary_leak": 0.02,
     "update_mode": "random",
-    "T": 0.0012
+    "T": 0.0008
   },
 
   "fuka3": {
@@ -56,13 +56,13 @@
     "tiles": { "tile_size": 8 },
     "bank": { "alpha_uptake": 1.0, "cost_work_coeff": 1.0, "leak": 0.02, "Bmin": 0.0, "sigma_B": 0.25 },
     "energy": {
-      "source_rate": 0.12,
+      "source_rate": 0.08,
       "transport_conductance": 0.15,
       "work_to_dissipation_fraction": 1.0,
-      "step_cost_coeff": 0.05,
-      "alpha_energy_per_entropy": 0.60
+      "step_cost_coeff": 0.08,
+      "alpha_energy_per_entropy": 0.80
     },
-    "temperature": { "T0": 0.0012, "beta_bound": 0.01, "beta_signal": 0.15 },
+    "temperature": { "T0": 0.0012, "beta_bound": 0.02, "beta_signal": 0.30 },
     "connection": {
       "init": {
         "amplitude_range": [0.05, 0.15],
@@ -71,11 +71,11 @@
         "curvature_range": [0.0, 0.10],
         "plasticity_range": [0.01, 0.05]
       },
-      "learning": { "eta": 0.10, "entropy_window": 24, "entropy_kind": "variance", "flux_limit": 0.20 }
+      "learning": { "eta": 0.07, "entropy_window": 20, "entropy_kind": "variance", "flux_limit": 0.20 }
     },
-    "denoising": { "use_sinusoid_term": true, "kappa_scale": 0.8, "gradient_clip": 1.0 },
+    "denoising": { "use_sinusoid_term": true, "kappa_scale": 0.9, "gradient_clip": 0.8 },
     "attractors": {
-      "spawn_prob_base": 0.006,
+      "spawn_prob_base": 0.005,
       "spawn_bias_env_weight": 0.6,
       "spawn_energy": 0.05,
       "amplitude_init": 0.06,
