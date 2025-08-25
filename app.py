@@ -653,8 +653,8 @@ attrs   = get_attractors_snapshot()
 
 summary = {
     "test_number": user_cfg.get("test_number", "N/A"),
-    "frames": eng.frames,
-    "final_frame": eng.frame_idx,
+    "frames": int(engine.cfg.get("frames", 0)),
+    "final_frame": int(T),
     "metrics": metrics,
     "attractors": attrs
 }
