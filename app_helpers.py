@@ -365,10 +365,28 @@ def draw_3d_connections_over_time(ph, E_stack: np.ndarray, S_stack: np.ndarray,
             st.info(f"Attractor overlay unavailable ({e}). Continue without it.")
 
     fig.update_layout(
-        title="3‑D: Env dots + Substrate connections over time",
-        scene=dict(xaxis_title="x", yaxis_title="y", zaxis_title="t"),
+        # keeps camera, zoom, pan, and uirevision-aware properties stable
+        uirevision="conn3d", 
+        scene=dict(
+            xaxis_title="x", yaxis_title="y", zaxis_title="t",
+            aspectmode="data",         # prevents “squash” on resize
+            dragmode="orbit"           # default left-drag behavior
+        ),
         height=640,
         template="plotly_dark",
         showlegend=True,
     )
-    ph.plotly_chart(fig, use_container_width=True, theme=None, key=new_key_fn("conn3d"))
+
+    # Use a STABLE key + pass Plotly config for nicer interactions
+    ph.plotly_chart(
+        fig,
+        use_container_width=True,
+        theme=None,
+        key="conn3d_plot",   # <- stable key (do NOT change per rerun)
+        config={
+            "scrollZoom": True,          # wheel / pinch to zoom
+            "displaylogo": False,
+            # optional: keep the bar lean
+            # "modeBarButtonsToRemove": ["toggleSpikelines"]
+        },
+    )
