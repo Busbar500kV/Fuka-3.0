@@ -42,7 +42,7 @@
     "flux_limit": 0.15,
     "boundary_leak": 0.02,
     "update_mode": "random",
-    "T": 0.00008
+    "T": 0.0001
   },
   "fuka3": {
     "ema": { "tau_var_fast": 4, "tau_var_slow": 32, "tau_muE": 8 },
