@@ -606,6 +606,11 @@ def step_physics(
     flux_metric = float(np.mean(np.abs(pull)))
     if not np.all(np.isfinite(cur)):
         cur = np.nan_to_num(cur, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    # save snapshots for metrics
+    st._last_S = cur
+    st._last_E = E
+    
     return cur, flux_metric
 
 # ============================================================
@@ -624,9 +629,20 @@ def get_fuka3_metrics():
             B_total = float(np.sum(st.B))
             T_mean  = float(np.mean(st.T))
             if st.ndim == 1:
-                ent_field = np.abs(np.diff(st.kappa)) if st.kappa.size > 1 else np.zeros(1, dtype=float)
+                # 1‑D: rolling variance of the latest substrate if available, else κ-diff
+                if hasattr(st, "_last_S"):
+                    ent_field = _rolling_var_1d(st._last_S, win=max(3, st.entropy_window))
+                else:
+                    ent_field = np.abs(np.diff(st.kappa)) if st.kappa.size > 1 else np.zeros(1, dtype=float)
             else:
-                ent_field = _box_var2d(st.kappa) if st.kappa.size > 1 else np.zeros_like(st.kappa)
+                # 2‑D: entropy proxy from substrate gradient; fall back to κ-variance
+                if hasattr(st, "_last_S"):
+                    Gmag = np.abs(_grad2d_x(st._last_S)) + np.abs(_grad2d_y(st._last_S))
+                    ent_field = _box_var2d(Gmag)
+                else:
+                    ent_field = _box_var2d(st.kappa) if st.kappa.size > 1 else np.zeros_like(st.kappa)
+                        
+            
             ent_mean = float(np.mean(ent_field)) if ent_field.size else 0.0
             ent_p95  = float(np.percentile(ent_field, 95)) if ent_field.size else 0.0
             attrs_alive = len(st.attractors) if hasattr(st, "attractors") else 0
