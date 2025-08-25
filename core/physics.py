@@ -620,7 +620,10 @@ def step_physics(
 def get_fuka3_metrics():
     """
     Return a list of metrics dicts, one per active substrate shape/state.
-    Keeps keys expected by app.py.
+    Provides:
+      - entropy_mean         : from substrate S (gradient-based in 2D, rolling-var in 1D)
+      - entropy_p95          : p95 of the same S-based entropy field
+      - entropy_mean_kappa   : diagnostic entropy-like proxy computed from kappa
     """
     out = []
     for shape, st in list(_STATES.items()):
@@ -628,55 +631,62 @@ def get_fuka3_metrics():
             F_total = float(np.sum(st.F))
             B_total = float(np.sum(st.B))
             T_mean  = float(np.mean(st.T))
-            
-            if st.ndim == 1:
-                if hasattr(st, "_last_S"):
+
+            # --- Build S-based entropy field (depends on dimensionality) ---
+            ent_mean_S = 0.0
+            ent_p95_S  = 0.0
+            if hasattr(st, "_last_S"):
+                if st.ndim == 1:
+                    # rolling variance of S itself (1D)
                     ent_field_S = _rolling_var_1d(st._last_S, win=max(3, st.entropy_window))
-                    ent_mean_S = float(np.mean(ent_field_S))
+                    ent_mean_S  = float(np.mean(ent_field_S)) if ent_field_S.size else 0.0
+                    ent_p95_S   = float(np.percentile(ent_field_S, 95)) if ent_field_S.size else 0.0
                 else:
-                    ent_mean_S = 0.0
-                # κ proxy (fallback / diagnostic)
-                ent_field_k = np.abs(np.diff(st.kappa)) if st.kappa.size > 1 else np.zeros(1, dtype=float)
-                ent_mean_k = float(np.mean(ent_field_k))
-            else:
-                if hasattr(st, "_last_S"):
+                    # variance of gradient magnitude (2D)
                     Gmag = np.abs(_grad2d_x(st._last_S)) + np.abs(_grad2d_y(st._last_S))
                     ent_field_S = _box_var2d(Gmag)
-                    ent_mean_S = float(np.mean(ent_field_S))
-                    ent_p95  = float(np.percentile(ent_field_S, 95))
-                else:
-                    ent_mean_S = 0.0
-                    ent_p95 = 0.0
-                # κ proxy (diagnostic)
-                ent_field_k = _box_var2d(st.kappa) if st.kappa.size > 1 else np.zeros_like(st.kappa)
-                ent_mean_k = float(np.mean(ent_field_k))
+                    ent_mean_S  = float(np.mean(ent_field_S)) if ent_field_S.size else 0.0
+                    ent_p95_S   = float(np.percentile(ent_field_S, 95)) if ent_field_S.size else 0.0
 
-            ent_mean = float(np.mean(ent_field)) if ent_field.size else 0.0
-            ent_p95  = float(np.percentile(ent_field, 95)) if ent_field.size else 0.0
-            attrs_alive = len(st.attractors) if hasattr(st, "attractors") else 0
+            # --- κ-based diagnostic (same shape as S in 2D; 1D uses diff proxy) ---
+            if st.ndim == 1:
+                ent_field_k = np.abs(np.diff(st.kappa)) if st.kappa.size > 1 else np.zeros(1, dtype=float)
+                ent_mean_k  = float(np.mean(ent_field_k))
+            else:
+                ent_field_k = _box_var2d(st.kappa) if st.kappa.size > 1 else np.zeros_like(st.kappa)
+                ent_mean_k  = float(np.mean(ent_field_k))
+
+            # --- other counters / bookkeeping ---
+            attrs_alive = len(getattr(st, "attractors", []))
             avg_reward  = float(np.mean([a.reward_avg for a in st.attractors])) if attrs_alive else 0.0
             last_spent  = float(getattr(st, "_last_spent", 0.0))
             last_diss   = float(getattr(st, "_last_dissip", 0.0))
-            conn_alive = int(np.sum(np.abs(st.kappa) > 1e-6))
-            eff_ratio = (ent_mean / (last_spent + 1e-12)) if last_spent > 0 else 0.0
+            conn_alive  = int(np.sum(np.abs(st.kappa) > 1e-6))
+            eff_ratio   = (ent_mean_S / (last_spent + 1e-12)) if last_spent > 0.0 else 0.0
+
             out.append({
                 "shape": tuple(shape),
                 "ndim": int(st.ndim),
                 "free_energy_total": F_total,
                 "bound_energy_total": B_total,
                 "temperature_mean": T_mean,
-                "entropy_mean": ent_mean,
-                "entropy_p95": ent_p95,
+
+                # S-based entropy signal (what your UI reads)
+                "entropy_mean": ent_mean_S,
+                "entropy_p95":  ent_p95_S,
+
+                # diagnostic κ “entropy”
+                "entropy_mean_kappa": ent_mean_k,
+
                 "connections_alive": conn_alive,
                 "attractors_alive": int(attrs_alive),
                 "avg_reward": avg_reward,
                 "work_paid_per_tick": last_spent,
                 "dissipation_per_tick": last_diss,
                 "efficiency_ratio": eff_ratio,
-                "entropy_mean": ent_mean_S,               # used by app already
-                "entropy_mean_kappa": ent_mean_k         # new: diagnostic only
             })
         except Exception:
+            # don't let a single bad state kill the metrics panel
             continue
     return out
     
@@ -715,7 +725,18 @@ def get_attractors_snapshot() -> List[Dict[str, Any]]:
         except Exception:
             continue
     return snaps
-    
+
+def get_active_shapes():
+    """
+    Returns a list of dicts like:
+      [{"shape": (H, W) or (X,), "ndim": 1|2}]
+    Useful for debugging coordinate consistency from the UI.
+    """
+    rows = []
+    for shape, st in list(_STATES.items()):
+        rows.append({"shape": tuple(shape), "ndim": int(getattr(st, "ndim", len(shape)))})
+    return rows
+
 def clear_states():
     """Clear cached LocalState instances (fresh start)."""
     _STATES.clear()
