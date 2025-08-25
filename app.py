@@ -9,6 +9,8 @@ import plotly.graph_objects as go
 from core import physics
 from core.engine import Engine
 
+from ui_camera import camera_controls
+
 # helpers
 from app_helpers import (
     load_defaults_strict, find_missing,
