@@ -185,6 +185,20 @@ def draw_combined_heatmap(ph, E_stack: np.ndarray, S_stack: np.ndarray, y_row: i
     )
     ph.plotly_chart(fig, use_container_width=True, theme=None, key=new_key_fn("combo2d"))
 
+def assert_equal_grids(E_stack: np.ndarray, S_stack: np.ndarray) -> Tuple[int,int,int]:
+    """
+    Ensure env and substrate share the exact (T,H,W) grid.
+    Returns (T,H,W) on success; stops the app otherwise.
+    """
+    if E_stack.shape != S_stack.shape:
+        st.error(
+            f"Grid mismatch: Env {E_stack.shape} vs Substrate {S_stack.shape}. "
+            "Physics and plotting must use the same (T,H,W)."
+        )
+        st.stop()
+    T, H, W = S_stack.shape
+    return T, H, W
+
 def draw_energy_timeseries(ph, t, e_cell, e_env, e_flux, new_key_fn, title="Energy vs time"):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=t, y=e_cell, name="E_cell"))
