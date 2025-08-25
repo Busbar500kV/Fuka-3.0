@@ -628,21 +628,29 @@ def get_fuka3_metrics():
             F_total = float(np.sum(st.F))
             B_total = float(np.sum(st.B))
             T_mean  = float(np.mean(st.T))
+            
             if st.ndim == 1:
-                # 1‑D: rolling variance of the latest substrate if available, else κ-diff
                 if hasattr(st, "_last_S"):
-                    ent_field = _rolling_var_1d(st._last_S, win=max(3, st.entropy_window))
+                    ent_field_S = _rolling_var_1d(st._last_S, win=max(3, st.entropy_window))
+                    ent_mean_S = float(np.mean(ent_field_S))
                 else:
-                    ent_field = np.abs(np.diff(st.kappa)) if st.kappa.size > 1 else np.zeros(1, dtype=float)
+                    ent_mean_S = 0.0
+                # κ proxy (fallback / diagnostic)
+                ent_field_k = np.abs(np.diff(st.kappa)) if st.kappa.size > 1 else np.zeros(1, dtype=float)
+                ent_mean_k = float(np.mean(ent_field_k))
             else:
-                # 2‑D: entropy proxy from substrate gradient; fall back to κ-variance
                 if hasattr(st, "_last_S"):
                     Gmag = np.abs(_grad2d_x(st._last_S)) + np.abs(_grad2d_y(st._last_S))
-                    ent_field = _box_var2d(Gmag)
+                    ent_field_S = _box_var2d(Gmag)
+                    ent_mean_S = float(np.mean(ent_field_S))
+                    ent_p95  = float(np.percentile(ent_field_S, 95))
                 else:
-                    ent_field = _box_var2d(st.kappa) if st.kappa.size > 1 else np.zeros_like(st.kappa)
-                        
-            
+                    ent_mean_S = 0.0
+                    ent_p95 = 0.0
+                # κ proxy (diagnostic)
+                ent_field_k = _box_var2d(st.kappa) if st.kappa.size > 1 else np.zeros_like(st.kappa)
+                ent_mean_k = float(np.mean(ent_field_k))
+
             ent_mean = float(np.mean(ent_field)) if ent_field.size else 0.0
             ent_p95  = float(np.percentile(ent_field, 95)) if ent_field.size else 0.0
             attrs_alive = len(st.attractors) if hasattr(st, "attractors") else 0
@@ -664,7 +672,9 @@ def get_fuka3_metrics():
                 "avg_reward": avg_reward,
                 "work_paid_per_tick": last_spent,
                 "dissipation_per_tick": last_diss,
-                "efficiency_ratio": eff_ratio
+                "efficiency_ratio": eff_ratio,
+                "entropy_mean": ent_mean_S,               # used by app already
+                "entropy_mean_kappa": ent_mean_k         # new: diagnostic only
             })
         except Exception:
             continue
