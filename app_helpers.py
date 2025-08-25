@@ -231,6 +231,65 @@ def _draw_3d_env_points(fig: go.Figure, E_stack: np.ndarray, thr: float, portion
         name="Env"
     ))
 
+def draw_3d_points_legacy(
+    ph,
+    E_stack: np.ndarray,
+    S_stack: np.ndarray,
+    *,
+    thr_points: float,
+    max_points_total: int,
+    uirevision: str = "points3d"
+):
+    """
+    Legacy sparse 3‑D point cloud: Env dots + Substrate dots.
+    Keeps camera/zoom stable with uirevision + stable key.
+    """
+    fig = go.Figure()
+
+    # Env points (reuse helper)
+    _draw_3d_env_points(fig, E_stack, thr=float(thr_points), portion=0.25)
+
+    # Substrate points
+    Sn_full = S_stack if S_stack.ndim == 3 else S_stack[:, None, :]
+    Sn = _norm_local(Sn_full)
+    tS, yS, xS = np.where(Sn >= float(thr_points))
+    nS = len(xS)
+    if nS > 0:
+        keep = int(min(nS, max_points_total // 2))
+        idx = np.random.choice(nS, size=keep, replace=False)
+        xS, yS, tS = xS[idx], yS[idx], tS[idx]
+    fig.add_trace(go.Scatter3d(
+        x=xS, y=yS, z=tS, mode="markers",
+        marker=dict(size=2, opacity=0.8),
+        name="Substrate"
+    ))
+
+    fig.update_layout(
+        title="Sparse 3‑D energy (points)",
+        scene=dict(
+            xaxis_title="x", yaxis_title="y", zaxis_title="t",
+            aspectmode="data",
+            dragmode="orbit",
+        ),
+        height=540,
+        template="plotly_dark",
+        showlegend=True,
+        uirevision=uirevision,   # <-- prevents resets between reruns/tool changes
+        margin=dict(l=0, r=0, t=40, b=0),
+    )
+
+    ph.plotly_chart(
+        fig,
+        use_container_width=True,
+        theme=None,
+        key="points3d_plot",      # <-- stable key so Streamlit doesn't remount
+        config={
+            "scrollZoom": True,
+            "displaylogo": False,
+            "doubleClick": "false",
+        },
+    )
+
 def _time_corr(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     am = a.mean(axis=0); bm = b.mean(axis=0)
     az = a - am; bz = b - bm
