@@ -1,5 +1,5 @@
 {
-  "test_number": "N-02",
+  "test_number": "N-03",
 
   "seed": 0,
   "frames": 500,
@@ -63,7 +63,7 @@
       "transport_conductance": 0.15,
       "work_to_dissipation_fraction": 1.0,
       "step_cost_coeff": 0.02,
-      "alpha_energy_per_entropy": 0.70
+      "alpha_energy_per_entropy": 0.05
     },
 
     "temperature": { "T0": 0.0010, "beta_bound": 0.015, "beta_signal": 0.20 },
