@@ -193,54 +193,23 @@ if st.button("Run / Rerun", use_container_width=True):
         draw_energy_timeseries(energy_ph, t_series, e_cell_series, e_env_series, e_flux_series, new_key)
         draw_stats_timeseries(stats_ph, t_series, entropy_series, variance_series, total_mass_series, new_key)
 
-        # Optional: legacy points (kept as-is)
+        # ---------- Legacy 3‑D points (moved to helper) ----------
         if (thr3d is not None) and (max3d is not None):
-            # env points
-            fig_pts = go.Figure()
-            from app_helpers import _norm_local, _draw_3d_env_points  # reuse internal helpers
-            _draw_3d_env_points(fig_pts, E_stack, thr=float(thr3d), portion=0.25)
-            # substrate points
-            Sn_full = S_stack if S_stack.ndim == 3 else S_stack[:, None, :]
-            Sn = _norm_local(Sn_full)
-            tS, yS, xS = np.where(Sn >= float(thr3d))
-            nS = len(xS)
-            if nS > 0:
-                keep = int(min(nS, max3d // 2))
-                idx = np.random.choice(nS, size=keep, replace=False)
-                xS, yS, tS = xS[idx], yS[idx], tS[idx]
-            fig_pts.add_trace(go.Scatter3d(x=xS, y=yS, z=tS, mode="markers", marker=dict(size=2, opacity=0.8), name="Substrate"))
-            
-            fig_pts.update_layout(
-                title="Sparse 3‑D energy (points)",
-                scene=dict(
-                    xaxis_title="x", yaxis_title="y", zaxis_title="t",
-                    aspectmode="data",
-                    dragmode="orbit"
-                ),
-                height=540,
-                template="plotly_dark",
-                showlegend=True,
-                uirevision="points3d"
+            from app_helpers import draw_3d_points_legacy
+            draw_3d_points_legacy(
+                points3d_ph,
+                E_stack, S_stack,
+                thr_points=float(thr3d),
+                max_points_total=int(max3d),
             )
-            
-            points3d_ph.plotly_chart(
-                fig_pts,
-                use_container_width=True,
-                theme=None,
-                key="points3d_plot",            # <- stable key
-                config={
-                    "scrollZoom": True,
-                    "displaylogo": False
-                },
-            )
-            
         else:
             st.warning("3‑D points view disabled: add 'thr3d' and 'max3d' to defaults.json to enable.")
 
-        # 3‑D connections + optional attractors
+        # ---------- 3‑D connections (helper) ----------
         if conn_enable and (conn_max_edges is not None):
+            from app_helpers import draw_3d_connections_over_time
+
             def _get_attr_items():
-                # flatten per-shape snapshot into a single list
                 if not hasattr(physics, "get_attractors_snapshot"):
                     return []
                 snap = physics.get_attractors_snapshot()
