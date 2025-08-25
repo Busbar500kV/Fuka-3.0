@@ -494,6 +494,7 @@ def step_physics(
 
     # >>> FIX: use persistent time index
     t_idx = st.tick
+    st.tick += 1
     
     # normalize for motor term
     Sn = S / (1e-12 + float(np.max(np.abs(S)))) if np.any(S) else np.zeros_like(S)
