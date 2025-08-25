@@ -1,5 +1,5 @@
 {
-  "test_number": "N-05",
+  "test_number": "O-01",
 
   "seed": 0,
   "frames": 500,
@@ -17,9 +17,7 @@
     "frames": 500,
     "noise_sigma": 0.015,
     "sources": [
-      { "kind": "moving_peak_2d", "amp": 1.0, "speed_x": 0.0, "speed_y": 0.0, "width_x": 7.0, "width_y": 7.0, "start_x": 24, "start_y": 24 },
-      { "kind": "moving_peak_2d", "amp": 0.9, "speed_x": 0.0, "speed_y": 0.0, "width_x": 9.0, "width_y": 9.0, "start_x": 56, "start_y": 28 },
-      { "kind": "moving_peak",    "amp": 0.7, "speed": 0.0, "width": 6.0, "start": 40, "y_center": "mid", "width_y": 16.0 }
+      { "kind": "moving_peak_2d", "amp": 1.2, "speed_x": 0.0, "speed_y": 0.0, "width_x": 2.0, "width_y": 2.0, "start_x": 70, "start_y": 8 }
     ]
   },
 
