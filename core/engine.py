@@ -1,10 +1,11 @@
 # core/engine.py
 from __future__ import annotations
 import numpy as np
-from typing import Dict, Any, Tuple, Any
+from typing import Dict, Any, Tuple
 
 from . import physics
 from .metrics import collect, format_for_log  # optional logging
+
 
 # ---------- Config normalization ----------
 def _config_to_dict(cfg_obj: Any) -> Dict[str, Any]:
@@ -31,6 +32,7 @@ def _config_to_dict(cfg_obj: Any) -> Dict[str, Any]:
         f"{type(cfg_obj).__name__} without a supported to_dict/as_dict."
     )
 
+
 # ---------- Engine ----------
 class Engine:
     """
@@ -45,9 +47,19 @@ class Engine:
         self.cfg = cfg
         self.rng = np.random.default_rng(int(cfg.get("seed", 0)))
 
+        # environment config
+        self.env_cfg = cfg.get("env", {}) if isinstance(cfg.get("env", {}), dict) else {}
+        self.env_H = int(self.env_cfg.get("height", int(cfg.get("space", 64))))
+        self.env_W = int(self.env_cfg.get("length", int(cfg.get("space", 64))))
+        self.env_sigma  = float(self.env_cfg.get("noise_sigma", 0.0))
+        self.env_sources = list(self.env_cfg.get("sources", []))
+
+        # frames: prefer top-level; fall back to env.frames; default 2000
+        self.frames = int(cfg.get("frames", self.env_cfg.get("frames", 2000)))
+        self.env_frames = self.frames  # keep env in lockstep with sim
+
         # classic knobs
-        self.frames = int(cfg.get("frames", 2000))
-        self.space  = int(cfg.get("space", 64))  # kept for UI/back‑compat
+        self.space    = int(cfg.get("space", 64))  # kept for UI/back‑compat
         self.k_flux   = float(cfg.get("k_flux", 0.08))
         self.k_motor  = float(cfg.get("k_motor", 0.20))
         self.diffuse  = float(cfg.get("diffuse", 0.05))
@@ -58,15 +70,6 @@ class Engine:
         # physics & fuka3 blocks (pass‑through to step_physics)
         self.physics_cfg = dict(cfg.get("physics", {}))
         self.fuka3_cfg   = dict(cfg.get("fuka3", {}))
-
-        # environment config
-        self.env_cfg = cfg.get("env", {}) if isinstance(cfg.get("env", {}), dict) else {}
-        # If env.* are missing, fall back to 'space' for a square grid
-        self.env_H = int(self.env_cfg.get("height", self.space))
-        self.env_W = int(self.env_cfg.get("length", self.space))
-        self.env_frames = int(self.env_cfg.get("frames", self.frames))
-        self.env_sigma  = float(self.env_cfg.get("noise_sigma", 0.0))
-        self.env_sources = list(self.env_cfg.get("sources", []))
 
         # substrate S matches the environment (FULL‑GRID)
         self.S = np.zeros((self.env_H, self.env_W), dtype=float)
@@ -79,20 +82,21 @@ class Engine:
         H, W = self.env_H, self.env_W
         E = np.zeros((H, W), dtype=float)
 
-        def add_peak_2d(amp, cx, cy, wx, wy):
+        def add_peak_2d(amp: float, cx: float, cy: float, wx: float, wy: float):
             y, x = np.indices((H, W))
             E[:] += amp * np.exp(
-                -((x - cx) ** 2) / (2 * wx * wx) - ((y - cy) ** 2) / (2 * wy * wy)
+                -((x - cx) ** 2) / (2.0 * wx * wx) - ((y - cy) ** 2) / (2.0 * wy * wy)
             )
 
         for src in self.env_sources:
             kind = src.get("kind", "moving_peak_2d")
+
             if kind == "moving_peak_2d":
                 amp = float(src.get("amp", 1.0))
                 vx  = float(src.get("speed_x", 0.0))
                 vy  = float(src.get("speed_y", 0.0))
-                wx  = float(src.get("width_x", 6.0))
-                wy  = float(src.get("width_y", 6.0))
+                wx  = max(1e-6, float(src.get("width_x", 6.0)))   # guard zero/neg
+                wy  = max(1e-6, float(src.get("width_y", 6.0)))
                 sx  = float(src.get("start_x", W // 2))
                 sy  = float(src.get("start_y", H // 2))
                 cx  = (sx + vx * t) % W
@@ -100,19 +104,21 @@ class Engine:
                 add_peak_2d(amp, cx, cy, wx, wy)
 
             elif kind == "moving_peak":
-                # 1D strip peak centered along y
+                # 1D strip peak centered along y (Gaussian in x and y)
                 amp = float(src.get("amp", 0.6))
                 v   = float(src.get("speed", 0.02))
-                w   = float(src.get("width", 5.0))
+                w   = max(1e-6, float(src.get("width", 5.0)))
                 start = float(src.get("start", W // 2))
                 y_center = src.get("y_center", "mid")
-                wy = float(src.get("width_y", 18.0))
+                wy = max(1e-6, float(src.get("width_y", 18.0)))
                 cx = (start + v * t) % W
                 cy = H // 2 if y_center == "mid" else float(y_center)
                 y, x = np.indices((H, W))
-                E += amp * np.exp(-((x - cx) ** 2) / (2 * w * w)) * np.exp(
-                    -((y - cy) ** 2) / (2 * wy * wy)
+                E += amp * np.exp(-((x - cx) ** 2) / (2.0 * w * w)) * np.exp(
+                    -((y - cy) ** 2) / (2.0 * wy * wy)
                 )
+
+            # (Other kinds could be added here without changing API)
 
         if self.env_sigma > 0.0:
             E += self.env_sigma * self.rng.standard_normal(size=E.shape)
@@ -148,7 +154,9 @@ class Engine:
                 rows = collect()
                 print(format_for_log(rows))
             except Exception:
-                pass  # never crash sim on logging
+                # Never crash the sim on logging
+                pass
+
 
 # Convenience runner (optional; unused by app.py)
 def run(cfg: Any, on_frame=None):
