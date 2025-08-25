@@ -151,7 +151,10 @@ def render_object(label: str, obj: Dict[str, Any], path: str = "") -> Dict[str, 
 with st.sidebar:
     st.header("Configuration (from defaults.json)")
     user_cfg = render_object("", deepcopy(cfg_default))
-
+    test_number = str(user_cfg.get("test_number", "")).strip()
+    if test_number:
+        st.subheader(f"Test: {test_number}")
+    
 # Optional UI knobs (present only if in defaults.json)
 had_live  = "live"  in user_cfg
 had_chunk = "chunk" in user_cfg
