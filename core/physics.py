@@ -108,6 +108,9 @@ def _div2d(px: np.ndarray, py: np.ndarray) -> np.ndarray:
 
 _STATES: Dict[Tuple[int, ...], "LocalState"] = {}
 
+# Global, deterministic time index for physics steps
+_GLOBAL_TICK = 0
+
 class LocalState:
     def __init__(self, shape: Tuple[int, ...],
                  cfg_phys: Dict[str, Any],
@@ -492,9 +495,13 @@ def step_physics(
         if "T" in cfg_phys:
             st.T_base = float(cfg_phys["T"])
 
+    # Deterministic time index (no rename, no LocalState attribute needed)
+    global _GLOBAL_TICK
+    t_idx = _GLOBAL_TICK
+    _GLOBAL_TICK += 1
+    
     # >>> FIX: use persistent time index
     t_idx = st.tick
-    st.tick += 1
     
     # normalize for motor term
     Sn = S / (1e-12 + float(np.max(np.abs(S)))) if np.any(S) else np.zeros_like(S)
@@ -545,9 +552,6 @@ def step_physics(
         flux_metric = float(np.mean(np.abs(pull)))
         if not np.all(np.isfinite(cur)):
             cur = np.nan_to_num(cur, nan=0.0, posinf=0.0, neginf=0.0)
-        
-        # >>> advance time AFTER using t_idx for this step
-        st.tick += 1
         
         return cur, flux_metric
 
@@ -692,3 +696,5 @@ def get_attractors_snapshot() -> List[Dict[str, Any]]:
 def clear_states():
     """Clear cached LocalState instances (fresh start)."""
     _STATES.clear()
+    global _GLOBAL_TICK
+    _GLOBAL_TICK = 0
