@@ -1,9 +1,10 @@
 {
-  "test_number": "O-02",
+  "test_number": "Noisy_Att-01",
 
   "seed": 0,
-  "frames": 600,
+  "frames": 500,
   "space": 32,
+
   "k_flux": 0.50,
   "k_motor": 0.08,
   "diffuse": 0.05,
@@ -14,7 +15,7 @@
   "env": {
     "length": 80,
     "height": 80,
-    "frames": 600,
+    "frames": 500,
     "noise_sigma": 0.015,
     "sources": [
       {
@@ -34,31 +35,25 @@
   "live": false,
 
   "thr3d": 0.10,
-  "max3d": 90000,
+  "max3d": 40000,
 
   "vis": {
     "heat_floor": 0.0,
     "heat_gamma": 1.0,
     "env_opacity": 1.0,
-    "sub_opacity": 0.85,
-
-    "attractors_overlay": {
-      "show": true,
-      "glyph_scale": 1.0,
-      "opacity": 0.80
-    }
+    "sub_opacity": 0.85
   },
 
   "connections": {
     "enable": true,
     "thr_env": 0.10,
-    "base_window": 24,
-    "eval_window": 40,
-    "corr_threshold": 0.40,
-    "dvar_threshold": 0.00001,
-    "energy_quantile": 0.15,
+    "base_window": 32,
+    "eval_window": 32,
+    "corr_threshold": 0.55,
+    "dvar_threshold": 0.00003,
+    "energy_quantile": 0.40,
     "stride_t": 1,
-    "max_edges": 90000,
+    "max_edges": 40000,
     "render": {
       "draw_in_3d": true,
       "edge_width": 2.0,
@@ -68,12 +63,10 @@
   },
 
   "physics": {
-    "alpha_speed": 0.90,
-    "beta_speed": 1.00,
-    "flux_limit": 0.35,
+    "T": 0.0015,
+    "flux_limit": 0.20,
     "boundary_leak": 0.01,
-    "update_mode": "random",
-    "T": 0.0007
+    "update_mode": "random"
   },
 
   "fuka3": {
@@ -82,85 +75,91 @@
       "tau_var_slow": 32,
       "tau_muE": 8
     },
-    "tiles": { "tile_size": 8 },
+    "tiles": {
+      "tile_size": 8
+    },
     "bank": {
       "alpha_uptake": 1.0,
       "cost_work_coeff": 1.0,
-      "leak": 0.01,
+      "leak": 0.02,
       "Bmin": 0.0,
       "sigma_B": 0.25
     },
 
     "energy": {
-      "source_rate": 0.90,
-      "transport_conductance": 0.06,
+      "source_rate": 0.22,
+      "transport_conductance": 0.15,
       "work_to_dissipation_fraction": 1.0,
-      "step_cost_coeff": 0.002,
-      "alpha_energy_per_entropy": 0.012
+      "step_cost_coeff": 0.004,
+      "alpha_energy_per_entropy": 0.015
     },
 
     "temperature": {
-      "T0": 0.0005,
-      "beta_bound": 0.010,
-      "beta_signal": 0.10
+      "T0": 0.0012,
+      "beta_bound": 0.015,
+      "beta_signal": 0.25
     },
 
     "connection": {
       "init": {
-        "amplitude_range": [0.15, 0.30],
-        "frequency_range": [0.04, 0.22],
+        "amplitude_range": [0.05, 0.15],
+        "frequency_range": [0.05, 0.25],
         "phase_range": [0.0, 6.283185307179586],
-        "curvature_range": [0.00, 0.60],
-        "plasticity_range": [0.03, 0.07]
+        "curvature_range": [0.0, 0.5],
+        "plasticity_range": [0.01, 0.05]
       },
       "learning": {
-        "eta": 0.32,
+        "eta": 0.18,
         "entropy_window": 24,
         "entropy_kind": "variance",
-        "flux_limit": 0.35
+        "flux_limit": 0.20
       }
     },
 
     "denoising": {
       "use_sinusoid_term": true,
-      "kappa_scale": 1.6,
+      "kappa_scale": 1.1,
       "gradient_clip": 3.0
     },
 
     "attractors": {
-      "spawn_prob_base": 0.15,
-      "spawn_trials": 200,
-      "spawn_bias_env_weight": 1.2,
-      "spawn_energy": 0.010,
-
-      "amplitude_init": 0.80,
-      "amplitude_min": 0.005,
-      "amplitude_max": 6.0,
-
-      "maint_cost_rate": 0.00004,
-      "bank_leak": 0.0004,
-      "decay_rate": 0.00015,
-
+      "spawn_prob_base": 0.010,
+      "spawn_trials": 32,
+      "spawn_bias_env_weight": 0.6,
+      "spawn_energy": 0.05,
+      "amplitude_init": 0.12,
+      "amplitude_min": 0.004,
+      "amplitude_max": 0.8,
+      "maint_cost_rate": 0.0005,
+      "bank_leak": 0.005,
+      "decay_rate": 0.006,
       "shape": {
-        "r_parallel_range": [12.0, 20.0],
-        "r_perp_range": [7.0, 14.0],
-        "theta_jitter": 0.08
+        "r_parallel_range": [2.0, 6.0],
+        "r_perp_range": [1.0, 3.0],
+        "theta_jitter": 0.3
       },
-
       "influence": {
-        "c_theta_rho": 1.6,
-        "c_theta_H": 3.5,
-        "c_alpha": 0.30,
-        "c_beta": 0.30,
-        "birth_multiplier_kappa": 2.0
+        "c_theta_rho": 0.7,
+        "c_theta_H": 1.4,
+        "c_alpha": 0.35,
+        "c_beta": 0.35,
+        "birth_multiplier_kappa": 0.8
       },
-
-      "max_count": 2048,
-      "render": {
-        "show_blobs": true,
-        "blob_opacity": 0.40,
-        "blob_stride_frames": 5
-      }
+      "encoding": {
+        "beta": 0.10,
+        "env_weight": 0.40,
+        "spawn_env_coeff": 0.80,
+        "spawn_enc_coeff": 1.60,
+        "radius_par_mult": 0.80,
+        "radius_perp_mult": 0.40,
+        "amp_mult": 0.50,
+        "jitter_reduction": 0.70,
+        "signal_noise_base": 0.50,
+        "signal_noise_reduction": 0.70,
+        "influence_enc_gain": 2.0,
+        "param_damp_gain": 1.5
+      },
+      "max_count": 256
     },
 
     "integration": {
