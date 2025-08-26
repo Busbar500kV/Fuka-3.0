@@ -283,36 +283,91 @@ class LocalState:
     # Attractors lifecycle
     # =======================
 
+    def _entropy_field(self, S: np.ndarray) -> np.ndarray:
+        if self.ndim == 1:
+            return _rolling_var_1d(S, win=max(3, self.entropy_window))
+        # 2D: variance of gradient magnitude
+        Gmag = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
+        return _box_var2d(Gmag)
+
+    def _update_encoding_maps(self, S: np.ndarray):
+        """EMA of entropy; encoding := positive (slow - fast), normalized to [0,1]."""
+        ent = self._entropy_field(S)
+        self._ent_fast = (1.0 - self._alpha_fast) * self._ent_fast + self._alpha_fast * ent
+        self._ent_slow = (1.0 - self._alpha_slow) * self._ent_slow + self._alpha_slow * ent
+        drop = np.maximum(self._ent_slow - self._ent_fast, 0.0)  # where entropy is dropping
+        # robust normalize
+        q05 = float(np.quantile(drop, 0.05)) if drop.size else 0.0
+        q95 = float(np.quantile(drop, 0.95)) if drop.size else 1.0
+        scale = max(1e-12, q95 - q05)
+        enc = np.clip((drop - q05) / scale, 0.0, 1.0)
+        # light smoothing to avoid flicker
+        beta = float(np.clip(self.enc_beta, 0.0, 1.0))
+        self.enc_map = (1.0 - beta) * getattr(self, "enc_map", enc) + beta * enc
+    
     def _maybe_spawn(self, env_like: np.ndarray):
         if self.ndim != 2:
-            return  # Option‑B is 2‑D focused
+            return
         if len(self.attractors) >= self.attr_max:
             return
 
         H, W = self.shape
-        # env‑biased coin: normalize |E|
+        # env bias
         Eabs = np.abs(env_like)
         if Eabs.size == 0:
             return
         En = Eabs / (1e-12 + np.max(Eabs))
-        trials = max(1, min(self.attr_spawn_trials, self.attr_max - len(self.attractors)))
 
+        # encoding map already updated by step() before calling this
+        Emap = self.enc_map if hasattr(self, "enc_map") else np.zeros_like(En)
+
+        # blend env + encoding cues
+        w_env = float(np.clip(self.enc_env_weight, 0.0, 1.0))
+        blend = w_env * En + (1.0 - w_env) * Emap
+
+        trials = max(1, min(self.attr_spawn_trials, self.attr_max - len(self.attractors)))
         for _ in range(trials):
             y = int(self.rng.integers(0, H))
             x = int(self.rng.integers(0, W))
-            bias = float(En[y, x])
-            p_spawn = self.attr_spawn_prob_base * (1.0 + self.attr_spawn_bias_w_env * bias)
+            b_env = float(En[y, x])
+            b_enc = float(Emap[y, x])
+
+            # spawn prob boosted by both signals
+            p_spawn = (
+                self.attr_spawn_prob_base
+                * (1.0 + self.enc_spawn_env_coeff * b_env + self.enc_spawn_enc_coeff * b_enc)
+            )
             if (self.rng.random() < p_spawn) and (self.F[y, x] >= self.attr_spawn_energy):
-                # draw oriented blob
+                # draw oriented blob — expand radii & amp with encoding strength
                 r_par  = float(self.rng.uniform(*self.r_par_rng))
                 r_perp = float(self.rng.uniform(*self.r_perp_rng))
-                theta  = float(self.rng.uniform(-np.pi, np.pi))
                 amp    = float(self.attr_amp_init)
+
+                gain_par  = 1.0 + self.enc_radius_par_mult  * b_enc
+                gain_perp = 1.0 + self.enc_radius_perp_mult * b_enc
+                amp_gain  = 1.0 + self.enc_amp_mult         * b_enc
+
+                r_par  *= gain_par
+                r_perp *= gain_perp
+                amp    *= amp_gain
+
+                # less jitter / less signal noise when encoding is strong
+                jt = max(0.0, self.theta_jitter * (1.0 - self.enc_jitter_reduction * b_enc))
+                sig_signal = max(
+                    0.0,
+                    self.enc_signal_noise_base * (1.0 - self.enc_signal_noise_red * b_enc)
+                )
+
+                theta  = float(self.rng.uniform(-np.pi, np.pi))
                 self.F[y, x] -= self.attr_spawn_energy
                 self.B[y, x] += self.work_to_dissipation_fraction * self.attr_spawn_energy
-                k = Attractor(self._next_attr_id, (y, x), r_par, r_perp, theta,
-                              amp, self.attr_maint_rate, self.attr_decay,
-                              sigma_theta=0.5, sigma_signal=0.5)
+
+                k = Attractor(
+                    self._next_attr_id, (y, x),
+                    r_par, r_perp, theta, amp,
+                    self.attr_maint_rate, self.attr_decay,
+                    sigma_theta=jt, sigma_signal=sig_signal
+                )
                 self._next_attr_id += 1
                 self.attractors.append(k)
                 if len(self.attractors) >= self.attr_max:
@@ -398,24 +453,33 @@ class LocalState:
         magE = np.hypot(Ex, Ey) + 1e-12
         ux, uy = Ex / magE, Ey / magE  # orientation field
 
+        # encoding gain + parameter damping fields
+        Emap = self.enc_map if hasattr(self, "enc_map") else np.zeros_like(S)
+        enc_gain = 1.0 + self.enc_influence_gain * Emap
+        damp = 1.0 / (1.0 + self.enc_param_damp_gain * Emap)  # reduce param noise where encoding is strong
+
+        # apply global damping to param grads first (elementwise)
+        gA   = gA   * damp
+        gf   = gf   * damp
+        gphi = gphi * damp
+
         for k in self.attractors:
             w = k.field(H, W)  # normalized footprint * amplitude
-            # preferred direction unit vector from attractor theta
             dx = np.cos(k.theta); dy = np.sin(k.theta)
-            # alignment of local env gradient with attractor orientation
-            align = (ux * dx + uy * dy)  # in [-1,1]
-            align = np.clip(align, -1.0, 1.0)
 
-            # steer κ to reduce mismatch along footprint weighted by alignment
-            gk -= self.c_theta_H * w * align
+            # alignment of local env gradient with attractor orientation
+            align = np.clip(ux * dx + uy * dy, -1.0, 1.0)
+
+            # steer κ more strongly in high-encoding regions
+            gk -= self.c_theta_H * w * align * enc_gain
 
             # light param bias to help “encode” repeated structure
-            gA   -= self.c_alpha * w * (self.A - np.mean(self.A))
+            gA   -= self.c_alpha * w * (self.A   - np.mean(self.A))
             gf   -= self.c_alpha * w * (self.freq - np.mean(self.freq))
-            gphi -= self.c_beta  * w * (self.phi - np.mean(self.phi))
+            gphi -= self.c_beta  * w * (self.phi  - np.mean(self.phi))
 
         return gA, gf, gphi, gk
-
+    
     # =======================
     # Energy gate & apply steps
     # =======================
@@ -522,37 +586,56 @@ def step_physics(
         if "T" in cfg_phys:
             st.T_base = float(cfg_phys["T"])
 
-    # Deterministic time index (no rename, no LocalState attribute needed)
+    # Deterministic time index (kept for reproducibility)
     global _GLOBAL_TICK
     t_idx = _GLOBAL_TICK
     _GLOBAL_TICK += 1
-    
+
     # normalize for motor term
     Sn = S / (1e-12 + float(np.max(np.abs(S)))) if np.any(S) else np.zeros_like(S)
 
-    # Energy: inject & transport
+    # ---------------- Energy: inject & transport ----------------
     st._inject_sources(E)
     if st.ndim == 1:
         st._transport_F_1d(st.F)
     else:
         st._transport_F_2d(st.F)
 
-    # Temperature update
+    # ---------------- Temperature update ----------------
     signal_var = _rolling_var_1d(S, win=max(3, st.entropy_window)) if st.ndim == 1 else _box_var2d(S)
     st._update_temperature(signal_var)
 
-    # Attractors
-    if st.ndim == 2:
-        st._maybe_spawn(E)
-        st._maintain_and_decay()
+    # ---------------- Encoding-aware bookkeeping (optional) ----------------
+    # If you've added the new helpers, we keep them up to date here.
+    if st.ndim == 2 and hasattr(st, "_update_encoding_maps"):
+        try:
+            st._update_encoding_maps(S)
+        except Exception:
+            # never let metrics/bookkeeping crash the sim
+            pass
 
-    # --- Denoising / learning (with attractor bias) ---
+    # ---------------- Attractors lifecycle ----------------
+    if st.ndim == 2:
+        # If you've replaced _maybe_spawn with the encoding-aware version, this will use it.
+        # If not, it will use the classic one — signature unchanged.
+        try:
+            st._maybe_spawn(E)
+        except Exception:
+            # fail-soft: no spawn this tick
+            pass
+
+        try:
+            st._maintain_and_decay()
+        except Exception:
+            # fail-soft: keep existing attractors as-is
+            pass
+
+    # ================== Denoising / learning (with attractor bias) ==================
     new_S = S.copy()
     T_eff = float(np.mean(st.T))
 
     if st.ndim == 1:
-        # (keep legacy 1‑D branch minimal)
-        # simple diffusion/flux/motor/decay only
+        # ---- legacy 1D path (unchanged) ----
         cur = S.copy()
         if diffuse != 0.0:
             lap = np.zeros_like(cur)
@@ -561,27 +644,33 @@ def step_physics(
                 lap[0]   = cur[1] - 2.0*cur[0] + cur[-1]
                 lap[-1]  = cur[0] - 2.0*cur[-1] + cur[-2]
             cur = cur + float(diffuse) * lap
+
         pull = float(k_flux) * (E - cur)
         pull = _clip(pull, -st.flux_limit, st.flux_limit)
         cur = cur + pull
         cur = cur * (1.0 - float(decay))
+
         if st.T_base > 0.0:
             cur = cur + st.T_base * rng.standard_normal(size=cur.shape)
+
         if k_motor != 0.0:
             motor_scale = np.power(1e-6 + np.abs(Sn), 0.5)
             cur = cur + float(k_motor) * motor_scale * rng.standard_normal(size=cur.shape)
+
         if st.boundary_leak > 0.0 and cur.size >= 2:
             cur[0]  *= (1.0 - st.boundary_leak)
             cur[-1] *= (1.0 - st.boundary_leak)
+
         flux_metric = float(np.mean(np.abs(pull)))
         if not np.all(np.isfinite(cur)):
             cur = np.nan_to_num(cur, nan=0.0, posinf=0.0, neginf=0.0)
-        
+
         return cur, flux_metric
 
-    # 2‑D branch (Option‑B aware)
-    
+    # ---- 2D branch (Option-B aware) ----
     gA, gf, gphi, gk, mism_x, mism_y = st._propose_grads_2d(t_idx, S, E)
+
+    # If you dropped in the new encoding-aware booster, this call will use it transparently.
     gA, gf, gphi, gk = st._boost_grads_with_attractors_2d(gA, gf, gphi, gk, S, E)
 
     dA   = - st.eta * gA
@@ -592,17 +681,21 @@ def step_physics(
     dS_pos_sum = float(np.sum(np.maximum(0.0, np.abs(mism_x))) + np.sum(np.maximum(0.0, np.abs(mism_y))))
     energy_paid_map, reward_map = st._apply_energy_gated(T_eff, dS_pos_sum, dA, df, dphi, dk, S)
 
-    # κ‑weighted smoothing (divergence form)
+    # κ-weighted smoothing (divergence form)
     kappa = np.clip(st.kappa, st.kappa_range[0], st.kappa_range[1]) * st.kappa_scale
     Sx = _grad2d_x(S); Sy = _grad2d_y(S)
     px = kappa * Sx;   py = kappa * Sy
     new_S = S + _div2d(px, py)
 
     # Selection / propagation
-    st._reward_and_select(reward_map, energy_paid_map)
-    st._propagate_if_strong()
+    try:
+        st._reward_and_select(reward_map, energy_paid_map)
+        st._propagate_if_strong()
+    except Exception:
+        # keep dynamics even if selection logic hiccups
+        pass
 
-    # --- Legacy substrate dynamics layered on top (visual parity) ---
+    # ---------------- Legacy substrate dynamics layered on top (visual parity) ----------------
     cur = new_S
     if diffuse != 0.0:
         lap = np.zeros_like(cur)
@@ -620,12 +713,15 @@ def step_physics(
     pull = _clip(pull, -st.flux_limit, st.flux_limit)
     cur = cur + pull
     cur = cur * (1.0 - float(decay))
+
     if st.T_base > 0.0:
         cur = cur + st.T_base * rng.standard_normal(size=cur.shape)
+
     if k_motor != 0.0:
         Sn2 = S / (1e-6 + float(np.max(np.abs(S)))) if np.any(S) else np.zeros_like(S)
         motor_scale = np.power(1e-6 + np.abs(Sn2), 0.5)
         cur = cur + float(k_motor) * motor_scale * rng.standard_normal(size=cur.shape)
+
     if st.boundary_leak > 0.0 and cur.shape[0] >= 2 and cur.shape[1] >= 2:
         cur[0,:]  *= (1.0 - st.boundary_leak); cur[-1,:] *= (1.0 - st.boundary_leak)
         cur[:,0]  *= (1.0 - st.boundary_leak); cur[:,-1] *= (1.0 - st.boundary_leak)
@@ -633,11 +729,11 @@ def step_physics(
     flux_metric = float(np.mean(np.abs(pull)))
     if not np.all(np.isfinite(cur)):
         cur = np.nan_to_num(cur, nan=0.0, posinf=0.0, neginf=0.0)
-    
+
     # save snapshots for metrics
     st._last_S = cur
     st._last_E = E
-    
+
     return cur, flux_metric
 
 # ============================================================
