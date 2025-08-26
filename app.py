@@ -17,7 +17,6 @@ try:
 except Exception:
     camera_controls = None  # not required
 
-# helpers (your updated file with grid assertion)
 from app_helpers import (
     load_defaults_strict, find_missing,
     ensure_session_keys, new_key,
@@ -97,6 +96,8 @@ with st.sidebar.expander("Attractors overlay (3-D)", expanded=False):
     attr_enable = st.checkbox("Show attractors (needs physics.get_attractors_snapshot)", value=True, key="attr:enable")
     attr_scale  = st.slider("Glyph length scale", 0.1, 5.0, 1.0, 0.1, key="attr:scale")
     attr_alpha  = st.slider("Opacity", 0.1, 1.0, 0.8, 0.05, key="attr:alpha")
+    # NEW: cap frames to keep overlay light enough for the browser
+    attr_max_frames = st.slider("Max frames in overlay", 5, 200, 40, 1, key="attr:max_frames")
 
 # ---------------- Heatmap slice control ----------------
 with st.sidebar.expander("2-D heatmap slice", expanded=False):
@@ -113,10 +114,10 @@ st.title("Simulation")
 combo2d_ph = st.empty()
 energy_ph  = st.empty()
 stats_ph   = st.empty()
-points3d_ph  = st.empty()   # legacy points (we add initial-substrate box here)
-conn3d_ph    = st.empty()   # connections
+points3d_ph  = st.empty()   # legacy points (initial-substrate box overlayed)
+conn3d_ph    = st.empty()   # connections plot
 
-# ---------------- Utility: compute & draw initial substrate bounds ----------------
+# ---------------- Utility ----------------
 def compute_init_bounds(H: int, W: int, space_side: int) -> Tuple[int, int, int, int]:
     s = int(max(1, min(space_side, H, W)))
     y0 = (H - s) // 2
@@ -125,25 +126,21 @@ def compute_init_bounds(H: int, W: int, space_side: int) -> Tuple[int, int, int,
     x1 = x0 + s - 1
     return y0, y1, x0, x1
 
-def add_box_wireframe(fig: go.Figure, *, y0: int, y1: int, x0: int, x1: int, z: int = 0, name: str = "Init substrate bounds", opacity: float = 0.5):
+def add_box_wireframe(fig: go.Figure, *, y0: int, y1: int, x0: int, x1: int, z: int = 0,
+                      name: str = "Init substrate bounds", opacity: float = 0.5):
     xs = [x0, x1, x1, x0, x0]
     ys = [y0, y0, y1, y1, y0]
     zs = [z,  z,  z,  z,  z]
-    fig.add_trace(go.Scatter3d(
-        x=xs, y=ys, z=zs, mode="lines",
-        line=dict(width=3),
-        opacity=float(opacity),
-        name=name
-    ))
+    fig.add_trace(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", line=dict(width=3),
+                               opacity=float(opacity), name=name))
 
 # =====================================================================
 # Run button: compute & SAVE results to st.session_state["last_run"]
 # =====================================================================
 if st.button("Run / Rerun", use_container_width=True):
-    physics.clear_states()           # fresh run for backend
-    engine = Engine(user_cfg)        # Engine normalizes dicts
+    physics.clear_states()
+    engine = Engine(user_cfg)
 
-    # Histories
     T = int(engine.cfg.get("frames", 2000))
     env_frames: List[np.ndarray] = []
     sub_frames: List[np.ndarray] = []
@@ -159,7 +156,7 @@ if st.button("Run / Rerun", use_container_width=True):
     status = st.empty()
 
     ok = True
-    attr_history = []   # collect per-frame attractors
+    attr_history = []   # per-frame attractors (lightweight)
     try:
         for step_idx in range(T):
             S, flux, E = engine.step()
@@ -225,7 +222,6 @@ if st.button("Run / Rerun", use_container_width=True):
         # Enforce SAME grid for plotting (no resampling)
         T_chk, H_chk, W_chk = assert_equal_grids(E_stack, S_stack)
 
-        # Prepare summary (cached so reruns re-display)
         summary = {
             "test_number": test_number,
             "seed": int(engine.cfg.get("seed", 0)),
@@ -239,7 +235,6 @@ if st.button("Run / Rerun", use_container_width=True):
             "total_mass_final": float(total_mass_series[-1]) if total_mass_series else 0.0,
         }
 
-        # Cache everything needed for rendering after Streamlit's implicit rerun
         st.session_state["last_run"] = {
             "E_stack": E_stack,
             "S_stack": S_stack,
@@ -257,7 +252,7 @@ if st.button("Run / Rerun", use_container_width=True):
         }
 
 # =====================================================================
-# Always render if we have a cached result (prevents “clear after run”)
+# Always render if we have a cached result
 # =====================================================================
 run = st.session_state["last_run"]
 if run is not None:
@@ -266,7 +261,7 @@ if run is not None:
     t_series = run["t_series"]
     e_cell_series = run["e_cell_series"]; e_env_series = run["e_env_series"]; e_flux_series = run["e_flux_series"]
     entropy_series = run["entropy_series"]; variance_series = run["variance_series"]; total_mass_series = run["total_mass_series"]
-    attr_history = run["attr_history"]
+    attr_history_all = run["attr_history"]
 
     # --------- 2-D overlays (combined heatmaps) ---------
     y_pick = int(np.clip(hm_slice_y, 0, S_stack.shape[1]-1))
@@ -333,6 +328,15 @@ if run is not None:
 
     # --------- 3-D connections (helper) ---------
     if conn_enable and (conn_max_edges is not None):
+        # Trim overlay to keep payload bounded (prevents front-end blow-ups)
+        ah = attr_history_all
+        if attr_enable and isinstance(ah, list) and len(ah) > 0:
+            k = int(st.session_state.get("attr:max_frames", 40))
+            if len(ah) > k:
+                ah = ah[-k:]
+        else:
+            ah = None
+
         def _get_attr_items():
             if not hasattr(physics, "get_attractors_snapshot"):
                 return []
@@ -362,10 +366,9 @@ if run is not None:
                 attr_alpha=float(attr_alpha),
                 get_attractor_items_fn=_get_attr_items,
                 new_key_fn=new_key,
-                attr_history=attr_history,  # helper may use per-frame history
+                attr_history=ah,  # trimmed history
             )
         except Exception as e:
-            # Never let overlay kill the plot; show without overlay and surface error once.
             st.warning("Attractor overlay failed; rendering connections without overlay.")
             try:
                 draw_3d_connections_over_time(
