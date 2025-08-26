@@ -1,13 +1,13 @@
 {
-  "test_number": "O-01",
+  "test_number": "O-02",
 
   "seed": 0,
   "frames": 500,
   "space": 32,
-  "k_flux": 0.50,
+  "k_flux": 0.65,
   "k_motor": 0.08,
-  "diffuse": 0.05,
-  "decay": 0.05,
+  "diffuse": 0.02,
+  "decay": 0.03,
   "band": 3,
   "bc": "reflect",
 
@@ -32,11 +32,11 @@
   "connections": {
     "enable": true,
     "thr_env": 0.10,
-    "base_window": 32,
-    "eval_window": 32,
-    "corr_threshold": 0.55,
-    "dvar_threshold": 0.00003,
-    "energy_quantile": 0.40,
+    "base_window": 24,
+    "eval_window": 24,
+    "corr_threshold": 0.40,
+    "dvar_threshold": 0.000003,
+    "energy_quantile": 0.70,
     "stride_t": 1,
     "max_edges": 40000,
     "render": { "draw_in_3d": true, "edge_width": 2.0, "opacity": 0.9, "color_mode": "by_entropy_drop" }
@@ -45,7 +45,7 @@
   "physics": {
     "alpha_speed": 0.90,
     "beta_speed": 1.00,
-    "flux_limit": 0.20,
+    "flux_limit": 0.30,
     "boundary_leak": 0.01,
     "update_mode": "random",
     "T": 0.0015
@@ -74,14 +74,14 @@
         "curvature_range": [0.00, 0.50],
         "plasticity_range": [0.01, 0.05]
       },
-      "learning": { "eta": 0.18, "entropy_window": 24, "entropy_kind": "variance", "flux_limit": 0.20 }
+      "learning": { "eta": 0.24, "entropy_window": 24, "entropy_kind": "variance", "flux_limit": 0.20 }
     },
 
-    "denoising": { "use_sinusoid_term": true, "kappa_scale": 1.1, "gradient_clip": 3.0 },
+    "denoising": { "use_sinusoid_term": true, "kappa_scale": 1.6, "gradient_clip": 5.0 },
 
     "attractors": {
       "spawn_prob_base": 0.010,
-      "spawn_bias_env_weight": 0.8,
+      "spawn_bias_env_weight": 0.80,
       "spawn_energy": 0.05,
       "amplitude_init": 0.12,
       "amplitude_min": 0.004,
