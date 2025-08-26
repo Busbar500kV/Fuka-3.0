@@ -37,6 +37,34 @@ def _resample_2d(img: np.ndarray, target_hw: Tuple[int, int]) -> np.ndarray:
         out[:, c] = np.interp(y_tgt, y_src, tmp[:, c])
     return out
 
+# ===== Encoding-aware helpers (NEW) =====
+def _normalize01(a: np.ndarray) -> np.ndarray:
+    m = float(np.nanmin(a)); M = float(np.nanmax(a))
+    if not np.isfinite(m) or not np.isfinite(M) or (M - m) < 1e-12:
+        return np.zeros_like(a)
+    return (a - m) / (M - m + 1e-12)
+
+def _lerp(a: float, b: float, t: float) -> float:
+    t = float(np.clip(t, 0.0, 1.0))
+    return (1.0 - t) * float(a) + t * float(b)
+
+def _smooth2d(prev: Optional[np.ndarray], cur: np.ndarray, alpha: float) -> np.ndarray:
+    if prev is None or prev.shape != cur.shape:
+        return cur.copy()
+    return (1.0 - alpha) * prev + alpha * cur
+
+def _inv_var_encoding(field: np.ndarray) -> np.ndarray:
+    # low local variance of |∇S|  => strong encoding (structure)
+    Gx = _grad2d_x(field); Gy = _grad2d_y(field)
+    Gmag = np.abs(Gx) + np.abs(Gy)
+    V = _box_var2d(Gmag)
+    Vn = _normalize01(V)
+    enc = 1.0 - Vn
+    return enc
+
+def _clip01(x: float) -> float:
+    return float(np.clip(x, 0.0, 1.0))
+
 # ============================================================
 # Utilities
 # ============================================================
@@ -209,6 +237,21 @@ class LocalState:
         self.enc_decay = 0.95                                 # smoothing rate (tune)
         self.enc_gain  = 0.05                                 # how fast it updates
         self._enc_ready = False
+        
+        # keep full f3 config for noise knobs (NEW)
+        self.f3_cfg = cfg_f3 or {}
+        
+        # --- encoding (entropy-drop) tracking (uses your EMA style) ---
+        self.enc_entropy_ema = np.zeros(shape, dtype=float)
+        self._enc_ready = False
+        # defaults; can be overridden by f3.attractors.noise
+        noise_cfg = ((cfg_f3 or {}).get("attractors", {}).get("noise", {}) 
+                     if isinstance(cfg_f3, dict) else {})
+        self.enc_decay = float(noise_cfg.get("ema_decay", 0.95))
+        self.enc_gain  = float(noise_cfg.get("ema_gain",  1.0 - self.enc_decay))
+        
+# expose a normalized map the rest of the code will read
+self.enc_strength = np.zeros(shape, dtype=float)   # in [0,1]
 
         # fields
         if self.ndim == 1:
@@ -291,18 +334,30 @@ class LocalState:
     def _update_encoding_maps(self, S: np.ndarray):
         """
         Track a smooth map of entropy/variance reduction as a proxy for 'encoding'.
-        Higher values mean 'structured' dynamics (entropy reduction).
+        Higher values => more structured (lower local entropy).
         """
-        # crude measure: local variance of gradient magnitude
+        if self.ndim != 2:
+            self._enc_ready = False
+            return
+    
+        # crude measure: local variance of |∇S|
         Gmag = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
-        ent_field = _box_var2d(Gmag)   # high variance = noisy, low variance = structure
-        enc_signal = 1.0 / (1.0 + ent_field)  # invert: low entropy → high encoding score
-
-        # exponential smoothing
+        ent_field = _box_var2d(Gmag)            # high -> noisy
+        enc_signal = 1.0 / (1.0 + ent_field)    # invert: low entropy -> high encoding
+    
+        # EMA (your style)
         self.enc_entropy_ema = (
-            self.enc_decay * self.enc_entropy_ema
-            + self.enc_gain * enc_signal
+            float(self.enc_decay) * self.enc_entropy_ema
+            + float(self.enc_gain)  * enc_signal
         )
+    
+        # keep a normalized [0,1] map for easy consumption elsewhere
+        m = float(np.nanmin(self.enc_entropy_ema)); M = float(np.nanmax(self.enc_entropy_ema))
+        if np.isfinite(m) and np.isfinite(M) and (M - m) > 1e-12:
+            self.enc_strength = (self.enc_entropy_ema - m) / (M - m + 1e-12)
+        else:
+            self.enc_strength = np.zeros_like(self.enc_entropy_ema)
+    
         self._enc_ready = True
     
     
@@ -340,47 +395,35 @@ class LocalState:
             return
         if len(self.attractors) >= self.attr_max:
             return
-
+    
         H, W = self.shape
         Eabs = np.abs(env_like)
         if Eabs.size == 0:
             return
         En = Eabs / (1e-12 + np.max(Eabs))
-
         trials = max(1, min(self.attr_spawn_trials, self.attr_max - len(self.attractors)))
+    
         for _ in range(trials):
             y = int(self.rng.integers(0, H))
             x = int(self.rng.integers(0, W))
-            bias_env = float(En[y, x])
-
-            # NEW: encoding bias
-            bias_enc = 0.0
-            if self._enc_ready:
-                bias_enc = float(self.enc_entropy_ema[y, x])
-
-            # combine biases
-            p_spawn = (
-                self.attr_spawn_prob_base
-                * (1.0 + self.attr_spawn_bias_w_env * bias_env)
-                * (1.0 + 2.0 * bias_enc)   # stronger weight near structured regions
-            )
-
+            bias = float(En[y, x])
+            p_spawn = self.attr_spawn_prob_base * (1.0 + self.attr_spawn_bias_w_env * bias)
             if (self.rng.random() < p_spawn) and (self.F[y, x] >= self.attr_spawn_energy):
                 r_par  = float(self.rng.uniform(*self.r_par_rng))
                 r_perp = float(self.rng.uniform(*self.r_perp_rng))
                 theta  = float(self.rng.uniform(-np.pi, np.pi))
                 amp    = float(self.attr_amp_init)
-
+    
+                # encoding-driven noise (NEW behavior)
+                sig_theta, sig_signal = self._noise_from_encoding(y, x)
+    
                 self.F[y, x] -= self.attr_spawn_energy
                 self.B[y, x] += self.work_to_dissipation_fraction * self.attr_spawn_energy
-                k = Attractor(
-                    self._next_attr_id, (y, x), r_par, r_perp, theta,
-                    amp, self.attr_maint_rate, self.attr_decay,
-                    sigma_theta=0.5, sigma_signal=0.5,
-                )
+                k = Attractor(self._next_attr_id, (y, x), r_par, r_perp, theta,
+                              amp, self.attr_maint_rate, self.attr_decay,
+                              sigma_theta=sig_theta, sigma_signal=sig_signal)
                 self._next_attr_id += 1
                 self.attractors.append(k)
-
                 if len(self.attractors) >= self.attr_max:
                     break
     
@@ -403,6 +446,12 @@ class LocalState:
             k.amp *= (1.0 - self.attr_decay)
             k.amp = float(np.clip(k.amp, 0.0, self.attr_amp_max))
             k.age += 1
+    
+            # retune noise from encoding (NEW)
+            sig_theta, sig_signal = self._noise_from_encoding(y, x)
+            k.sigma_theta  = float(sig_theta)
+            k.sigma_signal = float(sig_signal)
+    
             if k.amp >= self.attr_amp_min:
                 alive.append(k)
         self.attractors = alive
@@ -544,6 +593,37 @@ class LocalState:
             # bank -> amplitude (bounded)
             k.amp = float(np.clip(k.amp + 0.1 * (eff - k.reward_avg) * k.amp, 0.0, self.attr_amp_max))
 
+    def _encoding_at(self, y: int, x: int) -> float:
+        if not self._enc_ready or self.ndim != 2:
+            return 0.0
+        H, W = self.shape
+        if 0 <= y < H and 0 <= x < W:
+            v = float(self.enc_strength[y, x])
+            return float(np.clip(v, 0.0, 1.0))
+        return 0.0
+
+    def _noise_from_encoding(self, y: int, x: int) -> Tuple[float, float]:
+        """
+        Map local encoding -> (sigma_theta, sigma_signal).
+        Higher encoding => lower noise.
+        Reads knobs from f3.attractors.noise (with safe defaults).
+        """
+        enc = self._encoding_at(y, x)
+        noise_cfg = ((self.f3_cfg or {}).get("attractors", {}).get("noise", {})
+                     if isinstance(self.f3_cfg, dict) else {})
+    
+        sig_sig_max = float(noise_cfg.get("sigma_signal_max", 0.60))
+        sig_sig_min = float(noise_cfg.get("sigma_signal_min", 0.08))
+        sig_th_max  = float(noise_cfg.get("sigma_theta_max",  0.60))
+        sig_th_min  = float(noise_cfg.get("sigma_theta_min",  0.08))
+        k_enc       = float(noise_cfg.get("encoding_gain",    1.0))
+    
+        enc_eff = float(np.clip(enc ** k_enc, 0.0, 1.0))
+        sigma_signal = (1.0 - enc_eff) * sig_sig_max + enc_eff * sig_sig_min
+        sigma_theta  = (1.0 - enc_eff) * sig_th_max  + enc_eff * sig_th_min
+        return float(sigma_theta), float(sigma_signal)
+        
+    
     def _propagate_if_strong(self):
         if self.ndim != 2 or not self.attractors:
             return
@@ -617,6 +697,9 @@ def step_physics(
     # ---------------- Temperature update ----------------
     signal_var = _rolling_var_1d(S, win=max(3, st.entropy_window)) if st.ndim == 1 else _box_var2d(S)
     st._update_temperature(signal_var)
+    # build/update encoding maps before attractor lifecycle (uses S)
+    if st.ndim == 2:
+        st._update_encoding_maps(S)
 
     # ---------------- Encoding-aware bookkeeping (optional) ----------------
     # If you've added the new helpers, we keep them up to date here.
@@ -830,32 +913,27 @@ def get_fuka3_metrics():
 # Attractors snapshot for UI (used by app.py overlay)
 # ------------------------------------------------------------
 def get_attractors_snapshot() -> List[Dict[str, Any]]:
-    """
-    Returns a list of per-shape snapshots. Each item:
-      {
-        "shape": (H, W) or (X,),
-        "items": [
-          {"id": int, "pos": (y,x), "theta": float, "r_par": float, "r_perp": float,
-           "amp": float, "age": int, "alive": bool}
-        ]
-      }
-    Only 2-D shapes (option-B) emit items.
-    """
     snaps: List[Dict[str, Any]] = []
     for shape, st in list(_STATES.items()):
         try:
             entry: Dict[str, Any] = {"shape": tuple(shape), "items": []}
             if getattr(st, "ndim", 0) == 2 and hasattr(st, "attractors"):
+                H, W = shape
                 for a in st.attractors:
+                    y, x = getattr(a, "pos", (0, 0))
+                    enc_local = float(st._encoding_at(y, x)) if hasattr(st, "_encoding_at") else 0.0
                     entry["items"].append({
                         "id": int(getattr(a, "id", -1)),
-                        "pos": tuple(getattr(a, "pos", (0, 0))),
+                        "pos": (int(y), int(x)),
                         "theta": float(getattr(a, "theta", 0.0)),
                         "r_par": float(getattr(a, "r_par", 1.0)),
                         "r_perp": float(getattr(a, "r_perp", 1.0)),
                         "amp": float(getattr(a, "amp", 0.0)),
                         "age": int(getattr(a, "age", 0)),
                         "alive": bool(getattr(a, "alive", True)),
+                        # NEW for UI
+                        "sigma_signal": float(getattr(a, "sigma_signal", 0.0)),
+                        "encoding": enc_local,
                     })
             snaps.append(entry)
         except Exception:
