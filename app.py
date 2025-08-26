@@ -168,6 +168,18 @@ if st.button("Run / Rerun", use_container_width=True):
         for step_idx in range(T):
             S, flux, E = engine.step()
 
+            # Capture attractors at this frame (flatten shape list)
+            snap = physics.get_attractors_snapshot()
+            flat_items = []
+            for entry in snap:
+                for it in entry.get("items", []):
+                    flat_items.append({
+                        "id": int(it.get("id", -1)),
+                        "pos": tuple(it.get("pos", (0, 0))),   # (y, x)
+                        "amp": float(it.get("amp", 0.0)),
+                    })
+            attr_history.append({"t": int(step_idx), "items": flat_items})
+
             env_frames.append(E.copy())
             sub_frames.append(S.copy())
             t_series.append(step_idx)
