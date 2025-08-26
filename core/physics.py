@@ -141,6 +141,13 @@ class LocalState:
         self.beta_bound = float(_safe_get(f3T, "beta_bound", 0.01))
         self.beta_signal = float(_safe_get(f3T, "beta_signal", 0.0))
 
+        # fuka3: EMA (for encoding / entropy-drop)
+        f3EMA = f3.get("ema", {})
+        self.tau_fast = int(_safe_get(f3EMA, "tau_var_fast", 4))
+        self.tau_slow = int(_safe_get(f3EMA, "tau_var_slow", 32))
+        self._alpha_fast = 1.0 / max(1, self.tau_fast)
+        self._alpha_slow = 1.0 / max(1, self.tau_slow)
+
         # fuka3: connections
         f3C = f3.get("connection", {})
         f3Ci = f3C.get("init", {})
@@ -158,34 +165,44 @@ class LocalState:
         self.kappa_range = tuple(_safe_get(f3Ci, "curvature_range", (0.0, 0.1)))
         self.plasticity_range = tuple(_safe_get(f3Ci, "plasticity_range", (0.01, 0.05)))
 
-        # fuka3: attractors (Option‑B) — new knobs
+        # fuka3: attractors (Option-B)
         f3A = f3.get("attractors", {})
-        # spawn bias
         self.attr_spawn_prob_base  = float(_safe_get(f3A, "spawn_prob_base", 0.003))
         self.attr_spawn_bias_w_env = float(_safe_get(f3A, "spawn_bias_env_weight", 0.6))
         self.attr_spawn_energy     = float(_safe_get(f3A, "spawn_energy", 0.05))
-        # amplitude / costs
         self.attr_amp_init = float(_safe_get(f3A, "amplitude_init", 0.05))
         self.attr_amp_min  = float(_safe_get(f3A, "amplitude_min", 0.005))
         self.attr_amp_max  = float(_safe_get(f3A, "amplitude_max", 0.5))
         self.attr_maint_rate = float(_safe_get(f3A, "maint_cost_rate", 0.001))
         self.attr_decay    = float(_safe_get(f3A, "decay_rate", 0.01))
         self.attr_bank_leak = float(_safe_get(f3A, "bank_leak", 0.02))
-        # shape ranges
         shapeA = f3A.get("shape", {})
         self.r_par_rng  = tuple(_safe_get(shapeA, "r_parallel_range", (2.0, 6.0)))
         self.r_perp_rng = tuple(_safe_get(shapeA, "r_perp_range", (1.0, 3.0)))
         self.theta_jitter = float(_safe_get(shapeA, "theta_jitter", 0.3))
-        # influence weights
         infl = f3A.get("influence", {})
-        self.c_theta_rho  = float(_safe_get(infl, "c_theta_rho", 0.5))  # align with env grad orientation
-        self.c_theta_H    = float(_safe_get(infl, "c_theta_H",   0.5))  # weight on κ gradient along footprint
-        self.c_alpha      = float(_safe_get(infl, "c_alpha",     0.25)) # bias A,f,phi
+        self.c_theta_rho  = float(_safe_get(infl, "c_theta_rho", 0.5))
+        self.c_theta_H    = float(_safe_get(infl, "c_theta_H",   0.5))
+        self.c_alpha      = float(_safe_get(infl, "c_alpha",     0.25))
         self.c_beta       = float(_safe_get(infl, "c_beta",      0.25))
         self.birth_mul_kappa = float(_safe_get(infl, "birth_multiplier_kappa", 0.5))
-        # budgets
         self.attr_max = int(_safe_get(f3A, "max_count", 256))
         self.attr_spawn_trials = int(_safe_get(f3A, "spawn_trials", 32))
+
+        # NEW: encoding knobs (entropy-drop guided attractors)
+        enc = f3A.get("encoding", {})
+        self.enc_beta              = float(_safe_get(enc, "beta", 0.10))
+        self.enc_env_weight        = float(_safe_get(enc, "env_weight", 0.40))
+        self.enc_spawn_env_coeff   = float(_safe_get(enc, "spawn_env_coeff", 0.80))
+        self.enc_spawn_enc_coeff   = float(_safe_get(enc, "spawn_enc_coeff", 1.60))
+        self.enc_radius_par_mult   = float(_safe_get(enc, "radius_par_mult", 0.80))
+        self.enc_radius_perp_mult  = float(_safe_get(enc, "radius_perp_mult", 0.40))
+        self.enc_amp_mult          = float(_safe_get(enc, "amp_mult", 0.50))
+        self.enc_jitter_reduction  = float(_safe_get(enc, "jitter_reduction", 0.70))
+        self.enc_signal_noise_base = float(_safe_get(enc, "signal_noise_base", 0.50))
+        self.enc_signal_noise_red  = float(_safe_get(enc, "signal_noise_reduction", 0.70))
+        self.enc_influence_gain    = float(_safe_get(enc, "influence_enc_gain", 2.0))
+        self.enc_param_damp_gain   = float(_safe_get(enc, "param_damp_gain", 1.5))
 
         # fields
         if self.ndim == 1:
@@ -198,6 +215,11 @@ class LocalState:
             self.freq  = self.rng.uniform(*self.f_range, size=E)
             self.phi   = self.rng.uniform(*self.phi_range, size=E)
             self.kappa = self.rng.uniform(*self.kappa_range, size=E)
+
+            # encoding EMAs (1D)
+            self._ent_fast = np.zeros((X,), dtype=float)
+            self._ent_slow = np.zeros((X,), dtype=float)
+            self.enc_map   = np.zeros((X,), dtype=float)
         else:
             H, W = shape
             self.F = np.full((H, W), 0.5, float)
@@ -207,6 +229,11 @@ class LocalState:
             self.freq  = self.rng.uniform(*self.f_range, size=(H, W))
             self.phi   = self.rng.uniform(*self.phi_range, size=(H, W))
             self.kappa = self.rng.uniform(*self.kappa_range, size=(H, W))
+
+            # encoding EMAs (2D)
+            self._ent_fast = np.zeros((H, W), dtype=float)
+            self._ent_slow = np.zeros((H, W), dtype=float)
+            self.enc_map   = np.zeros((H, W), dtype=float)
 
         # attractors
         self.attractors: List[Attractor] = []
