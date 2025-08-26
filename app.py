@@ -346,6 +346,7 @@ if st.button("Run / Rerun", use_container_width=True):
                 attr_alpha=float(attr_alpha),
                 get_attractor_items_fn=_get_attr_items,
                 new_key_fn=new_key,
+                attr_history=attr_history,
             )
         else:
             st.info("Connections view is off. Enable it in the sidebar.")
