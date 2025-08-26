@@ -1,23 +1,23 @@
 {
-  "test_number": "O-03",
+  "test_number": "O-02",
 
   "seed": 0,
-  "frames": 600,
+  "frames": 500,
   "space": 32,
-  "k_flux": 0.65,
-  "k_motor": 0.05,
-  "diffuse": 0.02,
-  "decay": 0.04,
+  "k_flux": 0.50,
+  "k_motor": 0.08,
+  "diffuse": 0.05,
+  "decay": 0.05,
   "band": 3,
   "bc": "reflect",
 
   "env": {
     "length": 80,
     "height": 80,
-    "frames": 600,
-    "noise_sigma": 0.010,
+    "frames": 500,
+    "noise_sigma": 0.015,
     "sources": [
-      { "kind": "moving_peak_2d", "amp": 1.5, "speed_x": 0.0, "speed_y": 0.0, "width_x": 2.0, "width_y": 2.0, "start_x": 70, "start_y": 8 }
+      { "kind": "moving_peak_2d", "amp": 1.2, "speed_x": 0.0, "speed_y": 0.0, "width_x": 2.0, "width_y": 2.0, "start_x": 70, "start_y": 8 }
     ]
   },
 
@@ -25,30 +25,30 @@
   "live": false,
 
   "thr3d": 0.10,
-  "max3d": 40000,
+  "max3d": 80000,
 
   "vis": { "heat_floor": 0.0, "heat_gamma": 1.0, "env_opacity": 1.0, "sub_opacity": 0.85 },
 
   "connections": {
     "enable": true,
     "thr_env": 0.10,
-    "base_window": 48,
-    "eval_window": 48,
-    "corr_threshold": 0.50,
-    "dvar_threshold": 0.00002,
-    "energy_quantile": 0.75,
+    "base_window": 32,
+    "eval_window": 32,
+    "corr_threshold": 0.45,
+    "dvar_threshold": 0.00001,
+    "energy_quantile": 0.20,
     "stride_t": 1,
-    "max_edges": 40000,
+    "max_edges": 90000,
     "render": { "draw_in_3d": true, "edge_width": 2.0, "opacity": 0.9, "color_mode": "by_entropy_drop" }
   },
 
   "physics": {
     "alpha_speed": 0.90,
     "beta_speed": 1.00,
-    "flux_limit": 0.25,
-    "boundary_leak": 0.005,
+    "flux_limit": 0.30,
+    "boundary_leak": 0.01,
     "update_mode": "random",
-    "T": 0.0010
+    "T": 0.0015
   },
 
   "fuka3": {
@@ -57,58 +57,58 @@
     "bank": { "alpha_uptake": 1.0, "cost_work_coeff": 1.0, "leak": 0.02, "Bmin": 0.0, "sigma_B": 0.25 },
 
     "energy": {
-      "source_rate": 0.25,
-      "transport_conductance": 0.20,
+      "source_rate": 0.35,
+      "transport_conductance": 0.25,
       "work_to_dissipation_fraction": 1.0,
       "step_cost_coeff": 0.003,
-      "alpha_energy_per_entropy": 0.020
+      "alpha_energy_per_entropy": 0.012
     },
 
-    "temperature": { "T0": 0.0008, "beta_bound": 0.010, "beta_signal": 0.20 },
+    "temperature": { "T0": 0.0012, "beta_bound": 0.015, "beta_signal": 0.25 },
 
     "connection": {
       "init": {
-        "amplitude_range": [0.08, 0.20],
-        "frequency_range": [0.05, 0.20],
+        "amplitude_range": [0.05, 0.15],
+        "frequency_range": [0.05, 0.25],
         "phase_range": [0.0, 6.283185307179586],
-        "curvature_range": [0.10, 0.60],
-        "plasticity_range": [0.02, 0.06]
+        "curvature_range": [0.00, 0.50],
+        "plasticity_range": [0.01, 0.05]
       },
-      "learning": { "eta": 0.18, "entropy_window": 24, "entropy_kind": "variance", "flux_limit": 0.20 }
+      "learning": { "eta": 0.18, "entropy_window": 24, "entropy_kind": "variance", "flux_limit": 0.30 }
     },
 
-    "denoising": { "use_sinusoid_term": true, "kappa_scale": 1.6, "gradient_clip": 4.0 },
+    "denoising": { "use_sinusoid_term": true, "kappa_scale": 1.2, "gradient_clip": 3.0 },
 
     "attractors": {
-      "spawn_prob_base": 0.004,
-      "spawn_bias_env_weight": 1.2,
-      "spawn_energy": 0.08,
+      "spawn_prob_base": 0.05,
+      "spawn_trials": 128,
+      "spawn_bias_env_weight": 0.9,
+      "spawn_energy": 0.01,
 
-      "amplitude_init": 0.20,
-      "amplitude_min": 0.004,
+      "amplitude_init": 0.25,
+      "amplitude_min": 0.003,
       "amplitude_max": 2.0,
 
-      "maint_cost_rate": 0.0002,
-      "bank_leak": 0.002,
-      "decay_rate": 0.002,
+      "maint_cost_rate": 0.0001,
+      "bank_leak": 0.001,
+      "decay_rate": 0.001,
 
-      "shape": { "r_parallel_range": [6.0, 12.0], "r_perp_range": [3.0, 6.0], "theta_jitter": 0.15 },
+      "shape": {
+        "r_parallel_range": [6.0, 14.0],
+        "r_perp_range": [3.0, 8.0],
+        "theta_jitter": 0.15
+      },
 
       "influence": {
-        "c_theta_rho": 1.0,
-        "c_theta_H": 2.0,
-        "c_alpha": 0.40,
-        "c_beta": 0.40,
+        "c_theta_rho": 1.2,
+        "c_theta_H": 2.5,
+        "c_alpha": 0.25,
+        "c_beta": 0.25,
         "birth_multiplier_kappa": 1.2
       },
 
-      "fitness_weights": { "w_H": 0.30, "w_kappa": 0.20, "w_xi": 0.20, "w_r": 0.15, "w_p": 0.05, "w_b": 0.05, "w_o": 0.10, "w_c": 0.05 },
-      "survival": { "alpha_s": 8.0, "theta_s": 0.5 },
-      "absorption": { "alpha_a": 6.0, "beta_a": 4.0, "gamma_a": 4.0, "theta_abs": 0.6, "rho_abs": 1.05, "U_min": 0.2, "L_consec": 5, "engrave_cool_beta": 0.2, "engrave_weight_gain": 0.1 },
-      "overlap": { "Omega_ref": 0.5 },
-
-      "render": { "show_blobs": true, "blob_opacity": 0.35, "blob_stride_frames": 5 },
-      "legacy": { "spawn_prob": 0.01, "radius": 1, "eta_amplitude": 0.10, "sigma_theta": 0.5, "sigma_signal": 0.5, "propagate_energy": 0.05 }
+      "max_count": 1024,
+      "render": { "show_blobs": true, "blob_opacity": 0.35, "blob_stride_frames": 5 }
     },
 
     "integration": { "sigma_theta": 0.5, "fitness_efficiency_mix": 1.0 }
