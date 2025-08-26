@@ -93,7 +93,8 @@ with st.sidebar.expander("3-D Connections (substrate encoding)", expanded=True):
 
 # ---------------- Attractors overlay UI ----------------
 with st.sidebar.expander("Attractors overlay (3-D)", expanded=False):
-    attr_enable = st.checkbox("Show attractors (needs physics.get_attractors_snapshot)", value=False, key="attr:enable")
+    # default CHECKED now
+    attr_enable = st.checkbox("Show attractors (needs physics.get_attractors_snapshot)", value=True, key="attr:enable")
     attr_scale  = st.slider("Glyph length scale", 0.1, 5.0, 1.0, 0.1, key="attr:scale")
     attr_alpha  = st.slider("Opacity", 0.1, 1.0, 0.8, 0.05, key="attr:alpha")
 
@@ -117,10 +118,6 @@ conn3d_ph    = st.empty()   # connections
 
 # ---------------- Utility: compute & draw initial substrate bounds ----------------
 def compute_init_bounds(H: int, W: int, space_side: int) -> Tuple[int, int, int, int]:
-    """
-    Returns (y0, y1, x0, x1) for the initial square of side `space_side`,
-    centered in an HxW grid. Inclusive indices.
-    """
     s = int(max(1, min(space_side, H, W)))
     y0 = (H - s) // 2
     x0 = (W - s) // 2
@@ -129,7 +126,6 @@ def compute_init_bounds(H: int, W: int, space_side: int) -> Tuple[int, int, int,
     return y0, y1, x0, x1
 
 def add_box_wireframe(fig: go.Figure, *, y0: int, y1: int, x0: int, x1: int, z: int = 0, name: str = "Init substrate bounds", opacity: float = 0.5):
-    """Adds a rectangular wireframe at plane z."""
     xs = [x0, x1, x1, x0, x0]
     ys = [y0, y0, y1, y1, y0]
     zs = [z,  z,  z,  z,  z]
@@ -144,7 +140,6 @@ def add_box_wireframe(fig: go.Figure, *, y0: int, y1: int, x0: int, x1: int, z: 
 # Run button: compute & SAVE results to st.session_state["last_run"]
 # =====================================================================
 if st.button("Run / Rerun", use_container_width=True):
-    # fresh counters for your own UI logic (optional)
     physics.clear_states()           # fresh run for backend
     engine = Engine(user_cfg)        # Engine normalizes dicts
 
@@ -262,7 +257,7 @@ if st.button("Run / Rerun", use_container_width=True):
         }
 
 # =====================================================================
-# Always render if we have a cached result (prevents "clear after run")
+# Always render if we have a cached result (prevents “clear after run”)
 # =====================================================================
 run = st.session_state["last_run"]
 if run is not None:
@@ -290,30 +285,24 @@ if run is not None:
     if (thr3d is not None) and (max3d is not None):
         fig_pts = go.Figure()
 
-        # --- helper
         def _norm_local(A):
             m, M = float(np.nanmin(A)), float(np.nanmax(A))
             if not np.isfinite(m) or not np.isfinite(M) or M - m < 1e-12:
                 return np.zeros_like(A)
             return (A - m) / (M - m + 1e-12)
 
-        # --- Env points
-        E3 = E_stack
-        if E3.ndim == 2:
-            E3 = E3[:, None, :]
+        # Env points
+        E3 = E_stack if E_stack.ndim == 3 else E_stack[:, None, :]
         En = _norm_local(E3)
         tE, yE, xE = np.where(En >= float(thr3d))
         if len(xE) > 0:
             keep = int(max(1, 0.25 * min(len(xE), int(max3d))))
             idx = np.random.choice(len(xE), size=keep, replace=False)
             xE, yE, tE = xE[idx], yE[idx], tE[idx]
-        fig_pts.add_trace(go.Scatter3d(
-            x=xE, y=yE, z=tE, mode="markers",
-            marker=dict(size=2, opacity=0.55),
-            name="Env"
-        ))
+        fig_pts.add_trace(go.Scatter3d(x=xE, y=yE, z=tE, mode="markers",
+                                       marker=dict(size=2, opacity=0.55), name="Env"))
 
-        # --- Substrate points
+        # Substrate points
         S3 = S_stack if S_stack.ndim == 3 else S_stack[:, None, :]
         Sn = _norm_local(S3)
         tS, yS, xS = np.where(Sn >= float(thr3d))
@@ -321,45 +310,30 @@ if run is not None:
             keep = int(min(len(xS), int(max3d) // 2))
             idx = np.random.choice(len(xS), size=keep, replace=False)
             xS, yS, tS = xS[idx], yS[idx], tS[idx]
-        fig_pts.add_trace(go.Scatter3d(
-            x=xS, y=yS, z=tS, mode="markers",
-            marker=dict(size=2, opacity=0.8),
-            name="Substrate"
-        ))
+        fig_pts.add_trace(go.Scatter3d(x=xS, y=yS, z=tS, mode="markers",
+                                       marker=dict(size=2, opacity=0.8), name="Substrate"))
 
-        # --- Initial substrate bounds (wireframe at z=0)
+        # Initial substrate bounds (wireframe at z=0)
         space_side = int(cfg_default.get("space", min(H_chk, W_chk)))
         y0, y1, x0, x1 = compute_init_bounds(H_chk, W_chk, space_side)
         add_box_wireframe(fig_pts, y0=y0, y1=y1, x0=x0, x1=x1, z=0, name="Init substrate (z=0)", opacity=0.6)
 
         fig_pts.update_layout(
             title="Sparse 3-D energy (points) — with initial substrate bounds",
-            scene=dict(
-                xaxis_title="x (grid index)", yaxis_title="y (grid index)", zaxis_title="t (frame)",
-                aspectmode="data",
-                dragmode="orbit",
-            ),
-            height=540,
-            template="plotly_dark",
-            showlegend=True,
-            uirevision="points3d",
-            margin=dict(l=0, r=0, t=40, b=0),
+            scene=dict(xaxis_title="x (grid index)", yaxis_title="y (grid index)", zaxis_title="t (frame)",
+                       aspectmode="data", dragmode="orbit"),
+            height=540, template="plotly_dark", showlegend=True,
+            uirevision="points3d", margin=dict(l=0, r=0, t=40, b=0),
         )
-
-        points3d_ph.plotly_chart(
-            fig_pts,
-            use_container_width=True,
-            theme=None,
-            key="points3d_plot",
-            config={"scrollZoom": True, "displaylogo": False, "doubleClick": "false"},
-        )
+        points3d_ph.plotly_chart(fig_pts, use_container_width=True, theme=None,
+                                 key="points3d_plot",
+                                 config={"scrollZoom": True, "displaylogo": False, "doubleClick": "false"})
     else:
         st.warning("3-D points view disabled: add 'thr3d' and 'max3d' to defaults.json to enable.")
 
     # --------- 3-D connections (helper) ---------
     if conn_enable and (conn_max_edges is not None):
         def _get_attr_items():
-            # live snapshot support (optional); attr_history is used by the helper
             if not hasattr(physics, "get_attractors_snapshot"):
                 return []
             snap = physics.get_attractors_snapshot()
@@ -371,24 +345,46 @@ if run is not None:
                 items = snap["items"]
             return items
 
-        draw_3d_connections_over_time(
-            conn3d_ph,
-            E_stack, S_stack,
-            thr_env=float(conn_thr_env),
-            base_win=int(conn_base_win),
-            eval_win=int(conn_eval_win),
-            corr_thr=float(conn_corr_thr),
-            dvar_thr=float(conn_dvar_thr),
-            energy_q=float(conn_energy_q),
-            stride_t=int(conn_stride_t),
-            max_edges_total=int(conn_max_edges),
-            attr_overlay=bool(attr_enable),
-            attr_scale=float(attr_scale),
-            attr_alpha=float(attr_alpha),
-            get_attractor_items_fn=_get_attr_items,
-            new_key_fn=new_key,
-            attr_history=attr_history,
-        )
+        try:
+            draw_3d_connections_over_time(
+                conn3d_ph,
+                E_stack, S_stack,
+                thr_env=float(conn_thr_env),
+                base_win=int(conn_base_win),
+                eval_win=int(conn_eval_win),
+                corr_thr=float(conn_corr_thr),
+                dvar_thr=float(conn_dvar_thr),
+                energy_q=float(conn_energy_q),
+                stride_t=int(conn_stride_t),
+                max_edges_total=int(conn_max_edges),
+                attr_overlay=bool(attr_enable),
+                attr_scale=float(attr_scale),
+                attr_alpha=float(attr_alpha),
+                get_attractor_items_fn=_get_attr_items,
+                new_key_fn=new_key,
+                attr_history=attr_history,  # helper may use per-frame history
+            )
+        except Exception as e:
+            # Never let overlay kill the plot; show without overlay and surface error once.
+            st.warning("Attractor overlay failed; rendering connections without overlay.")
+            try:
+                draw_3d_connections_over_time(
+                    conn3d_ph,
+                    E_stack, S_stack,
+                    thr_env=float(conn_thr_env),
+                    base_win=int(conn_base_win),
+                    eval_win=int(conn_eval_win),
+                    corr_thr=float(conn_corr_thr),
+                    dvar_thr=float(conn_dvar_thr),
+                    energy_q=float(conn_energy_q),
+                    stride_t=int(conn_stride_t),
+                    max_edges_total=int(conn_max_edges),
+                    attr_overlay=False,
+                    get_attractor_items_fn=_get_attr_items,
+                    new_key_fn=new_key,
+                )
+            finally:
+                st.exception(e)
     else:
         st.info("Connections view is off. Enable it in the sidebar.")
 
