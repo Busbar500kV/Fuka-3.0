@@ -203,6 +203,12 @@ class LocalState:
         self.enc_signal_noise_red  = float(_safe_get(enc, "signal_noise_reduction", 0.70))
         self.enc_influence_gain    = float(_safe_get(enc, "influence_enc_gain", 2.0))
         self.enc_param_damp_gain   = float(_safe_get(enc, "param_damp_gain", 1.5))
+        
+        # --- NEW encoding-aware state (for attractor guidance) ---
+        self.enc_entropy_ema = np.zeros(shape, dtype=float)   # smooth entropy-drop signal
+        self.enc_decay = 0.95                                 # smoothing rate (tune)
+        self.enc_gain  = 0.05                                 # how fast it updates
+        self._enc_ready = False
 
         # fields
         if self.ndim == 1:
@@ -279,6 +285,27 @@ class LocalState:
             T = T + self.beta_signal * signal_var
         self.T = T
 
+    # ----------------------------------------
+    # NEW: update encoding maps each timestep
+    # ----------------------------------------
+    def _update_encoding_maps(self, S: np.ndarray):
+        """
+        Track a smooth map of entropy/variance reduction as a proxy for 'encoding'.
+        Higher values mean 'structured' dynamics (entropy reduction).
+        """
+        # crude measure: local variance of gradient magnitude
+        Gmag = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
+        ent_field = _box_var2d(Gmag)   # high variance = noisy, low variance = structure
+        enc_signal = 1.0 / (1.0 + ent_field)  # invert: low entropy → high encoding score
+
+        # exponential smoothing
+        self.enc_entropy_ema = (
+            self.enc_decay * self.enc_entropy_ema
+            + self.enc_gain * enc_signal
+        )
+        self._enc_ready = True
+    
+    
     # =======================
     # Attractors lifecycle
     # =======================
@@ -305,6 +332,9 @@ class LocalState:
         beta = float(np.clip(self.enc_beta, 0.0, 1.0))
         self.enc_map = (1.0 - beta) * getattr(self, "enc_map", enc) + beta * enc
     
+    # ----------------------------------------
+    # MOD: use encoding when spawning
+    # ----------------------------------------
     def _maybe_spawn(self, env_like: np.ndarray):
         if self.ndim != 2:
             return
@@ -312,66 +342,49 @@ class LocalState:
             return
 
         H, W = self.shape
-        # env bias
         Eabs = np.abs(env_like)
         if Eabs.size == 0:
             return
         En = Eabs / (1e-12 + np.max(Eabs))
 
-        # encoding map already updated by step() before calling this
-        Emap = self.enc_map if hasattr(self, "enc_map") else np.zeros_like(En)
-
-        # blend env + encoding cues
-        w_env = float(np.clip(self.enc_env_weight, 0.0, 1.0))
-        blend = w_env * En + (1.0 - w_env) * Emap
-
         trials = max(1, min(self.attr_spawn_trials, self.attr_max - len(self.attractors)))
         for _ in range(trials):
             y = int(self.rng.integers(0, H))
             x = int(self.rng.integers(0, W))
-            b_env = float(En[y, x])
-            b_enc = float(Emap[y, x])
+            bias_env = float(En[y, x])
 
-            # spawn prob boosted by both signals
+            # NEW: encoding bias
+            bias_enc = 0.0
+            if self._enc_ready:
+                bias_enc = float(self.enc_entropy_ema[y, x])
+
+            # combine biases
             p_spawn = (
                 self.attr_spawn_prob_base
-                * (1.0 + self.enc_spawn_env_coeff * b_env + self.enc_spawn_enc_coeff * b_enc)
+                * (1.0 + self.attr_spawn_bias_w_env * bias_env)
+                * (1.0 + 2.0 * bias_enc)   # stronger weight near structured regions
             )
+
             if (self.rng.random() < p_spawn) and (self.F[y, x] >= self.attr_spawn_energy):
-                # draw oriented blob — expand radii & amp with encoding strength
                 r_par  = float(self.rng.uniform(*self.r_par_rng))
                 r_perp = float(self.rng.uniform(*self.r_perp_rng))
+                theta  = float(self.rng.uniform(-np.pi, np.pi))
                 amp    = float(self.attr_amp_init)
 
-                gain_par  = 1.0 + self.enc_radius_par_mult  * b_enc
-                gain_perp = 1.0 + self.enc_radius_perp_mult * b_enc
-                amp_gain  = 1.0 + self.enc_amp_mult         * b_enc
-
-                r_par  *= gain_par
-                r_perp *= gain_perp
-                amp    *= amp_gain
-
-                # less jitter / less signal noise when encoding is strong
-                jt = max(0.0, self.theta_jitter * (1.0 - self.enc_jitter_reduction * b_enc))
-                sig_signal = max(
-                    0.0,
-                    self.enc_signal_noise_base * (1.0 - self.enc_signal_noise_red * b_enc)
-                )
-
-                theta  = float(self.rng.uniform(-np.pi, np.pi))
                 self.F[y, x] -= self.attr_spawn_energy
                 self.B[y, x] += self.work_to_dissipation_fraction * self.attr_spawn_energy
-
                 k = Attractor(
-                    self._next_attr_id, (y, x),
-                    r_par, r_perp, theta, amp,
-                    self.attr_maint_rate, self.attr_decay,
-                    sigma_theta=jt, sigma_signal=sig_signal
+                    self._next_attr_id, (y, x), r_par, r_perp, theta,
+                    amp, self.attr_maint_rate, self.attr_decay,
+                    sigma_theta=0.5, sigma_signal=0.5,
                 )
                 self._next_attr_id += 1
                 self.attractors.append(k)
+
                 if len(self.attractors) >= self.attr_max:
                     break
+    
+    
 
     def _maintain_and_decay(self):
         alive: List[Attractor] = []
