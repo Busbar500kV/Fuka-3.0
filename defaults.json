@@ -1,13 +1,13 @@
 {
-  "test_number": "O-02",
+  "test_number": "O-03",
 
   "seed": 0,
   "frames": 500,
   "space": 32,
-  "k_flux": 0.50,
-  "k_motor": 0.08,
-  "diffuse": 0.05,
-  "decay": 0.05,
+  "k_flux": 0.55,
+  "k_motor": 0.06,
+  "diffuse": 0.03,
+  "decay": 0.04,
   "band": 3,
   "bc": "reflect",
 
@@ -15,9 +15,9 @@
     "length": 80,
     "height": 80,
     "frames": 500,
-    "noise_sigma": 0.015,
+    "noise_sigma": 0.008,
     "sources": [
-      { "kind": "moving_peak_2d", "amp": 1.2, "speed_x": 0.0, "speed_y": 0.0, "width_x": 2.0, "width_y": 2.0, "start_x": 70, "start_y": 8 }
+      { "kind": "moving_peak_2d", "amp": 1.4, "speed_x": 0.0, "speed_y": 0.0, "width_x": 2.0, "width_y": 2.0, "start_x": 70, "start_y": 8 }
     ]
   },
 
@@ -25,18 +25,18 @@
   "live": false,
 
   "thr3d": 0.10,
-  "max3d": 80000,
+  "max3d": 90000,
 
   "vis": { "heat_floor": 0.0, "heat_gamma": 1.0, "env_opacity": 1.0, "sub_opacity": 0.85 },
 
   "connections": {
     "enable": true,
     "thr_env": 0.10,
-    "base_window": 32,
-    "eval_window": 32,
-    "corr_threshold": 0.45,
+    "base_window": 24,
+    "eval_window": 40,
+    "corr_threshold": 0.40,
     "dvar_threshold": 0.00001,
-    "energy_quantile": 0.20,
+    "energy_quantile": 0.15,
     "stride_t": 1,
     "max_edges": 90000,
     "render": { "draw_in_3d": true, "edge_width": 2.0, "opacity": 0.9, "color_mode": "by_entropy_drop" }
@@ -45,66 +45,66 @@
   "physics": {
     "alpha_speed": 0.90,
     "beta_speed": 1.00,
-    "flux_limit": 0.30,
+    "flux_limit": 0.35,
     "boundary_leak": 0.01,
     "update_mode": "random",
-    "T": 0.0015
+    "T": 0.0007
   },
 
   "fuka3": {
     "ema": { "tau_var_fast": 4, "tau_var_slow": 32, "tau_muE": 8 },
     "tiles": { "tile_size": 8 },
-    "bank": { "alpha_uptake": 1.0, "cost_work_coeff": 1.0, "leak": 0.02, "Bmin": 0.0, "sigma_B": 0.25 },
+    "bank": { "alpha_uptake": 1.0, "cost_work_coeff": 1.0, "leak": 0.01, "Bmin": 0.0, "sigma_B": 0.25 },
 
     "energy": {
-      "source_rate": 0.35,
-      "transport_conductance": 0.25,
+      "source_rate": 0.80,
+      "transport_conductance": 0.05,
       "work_to_dissipation_fraction": 1.0,
-      "step_cost_coeff": 0.003,
-      "alpha_energy_per_entropy": 0.012
+      "step_cost_coeff": 0.0025,
+      "alpha_energy_per_entropy": 0.010
     },
 
-    "temperature": { "T0": 0.0012, "beta_bound": 0.015, "beta_signal": 0.25 },
+    "temperature": { "T0": 0.0005, "beta_bound": 0.010, "beta_signal": 0.10 },
 
     "connection": {
       "init": {
-        "amplitude_range": [0.05, 0.15],
-        "frequency_range": [0.05, 0.25],
+        "amplitude_range": [0.10, 0.25],
+        "frequency_range": [0.04, 0.20],
         "phase_range": [0.0, 6.283185307179586],
-        "curvature_range": [0.00, 0.50],
-        "plasticity_range": [0.01, 0.05]
+        "curvature_range": [0.00, 0.60],
+        "plasticity_range": [0.02, 0.06]
       },
-      "learning": { "eta": 0.18, "entropy_window": 24, "entropy_kind": "variance", "flux_limit": 0.30 }
+      "learning": { "eta": 0.30, "entropy_window": 24, "entropy_kind": "variance", "flux_limit": 0.35 }
     },
 
-    "denoising": { "use_sinusoid_term": true, "kappa_scale": 1.2, "gradient_clip": 3.0 },
+    "denoising": { "use_sinusoid_term": true, "kappa_scale": 1.6, "gradient_clip": 3.0 },
 
     "attractors": {
-      "spawn_prob_base": 0.05,
-      "spawn_trials": 128,
-      "spawn_bias_env_weight": 0.9,
-      "spawn_energy": 0.01,
+      "spawn_prob_base": 0.08,
+      "spawn_trials": 160,
+      "spawn_bias_env_weight": 1.0,
+      "spawn_energy": 0.008,
 
-      "amplitude_init": 0.25,
-      "amplitude_min": 0.003,
-      "amplitude_max": 2.0,
+      "amplitude_init": 0.60,
+      "amplitude_min": 0.002,
+      "amplitude_max": 5.0,
 
-      "maint_cost_rate": 0.0001,
-      "bank_leak": 0.001,
-      "decay_rate": 0.001,
+      "maint_cost_rate": 0.00005,
+      "bank_leak": 0.0005,
+      "decay_rate": 0.0002,
 
       "shape": {
-        "r_parallel_range": [6.0, 14.0],
-        "r_perp_range": [3.0, 8.0],
-        "theta_jitter": 0.15
+        "r_parallel_range": [10.0, 18.0],
+        "r_perp_range": [6.0, 12.0],
+        "theta_jitter": 0.10
       },
 
       "influence": {
-        "c_theta_rho": 1.2,
-        "c_theta_H": 2.5,
+        "c_theta_rho": 1.4,
+        "c_theta_H": 3.2,
         "c_alpha": 0.25,
         "c_beta": 0.25,
-        "birth_multiplier_kappa": 1.2
+        "birth_multiplier_kappa": 1.8
       },
 
       "max_count": 1024,
