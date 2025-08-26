@@ -163,6 +163,7 @@ if st.button("Run / Rerun", use_container_width=True):
     status = st.empty()
 
     ok = True
+    attr_history = []   # <— collect per-frame attractors
     try:
         for step_idx in range(T):
             S, flux, E = engine.step()
