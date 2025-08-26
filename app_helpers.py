@@ -371,22 +371,25 @@ def draw_3d_connections_over_time(
     attr_overlay: bool,
     attr_scale: float,
     attr_alpha: float,
-    get_attractor_items_fn,
-    new_key_fn,                      # kept for backward-compat (not used)
+    get_attractor_items_fn,   # kept for compatibility (unused when attr_history provided)
+    new_key_fn,               # kept for compatibility
     *,
-    camera: Optional[dict] = None,   # <— NEW: provide a camera dict to lock the view
-    uirevision: str = "conn3d"       # <— persist state between reruns
+    camera: dict | None = None,
+    uirevision: str = "conn3d",
+    attr_history: list | None = None,   # <— NEW: per-frame attractor snapshots
 ):
     """
-    Draws Env dots + time-layered substrate connections in 3D.
-    Camera can be stabilized by passing a Plotly camera dict via `camera`.
+    Draw Env dots + time-layered substrate connections in 3D.
+    If `attr_history` is provided as a list of {"t": int, "items":[{id, pos(y,x), amp}]},
+    we plot (a) per-frame attractor points and (b) trajectories (by id) across time.
     """
+
     fig = go.Figure()
 
-    # Env dots (single pass)
+    # -------- Env points (sparse) --------
     _draw_3d_env_points(fig, E_stack, thr=thr_env, portion=0.30, cap_pts=150000)
 
-    # Build connection segments across time with stride
+    # -------- Substrate connections over time --------
     T, H, W = S_stack.shape
     xs_all, ys_all, zs_all = [], [], []
     budget = int(max_edges_total)
@@ -403,7 +406,6 @@ def draw_3d_connections_over_time(
             keep = max(0, budget - len(xs_all))
             if keep <= 0:
                 break
-            # keep whole 3-point triplets
             triplets = len(xs) // 3
             if triplets > 0:
                 idx = np.random.choice(triplets, size=max(1, keep // 3), replace=False)
@@ -427,39 +429,82 @@ def draw_3d_connections_over_time(
             name="Substrate connections"
         ))
 
-    # Optional attractors overlay
-    if attr_overlay and callable(get_attractor_items_fn):
-        try:
-            items = get_attractor_items_fn()
-            z0 = S_stack.shape[0] - 1
-            Xs, Ys, Zs = [], [], []
-            for it in items:
-                pos = it.get("pos", (0, 0))
-                y0, x0 = int(pos[0]), int(pos[1])
-                theta = float(it.get("theta", 0.0))
-                r_par = float(it.get("r_par", 1.0))
-                amp   = float(it.get("amp", 0.5))
-                L = max(0.2, r_par) * max(0.2, amp) * float(attr_scale)
-                dx = L * np.cos(theta); dy = L * np.sin(theta)
-                Xs += [x0 - dx, x0 + dx, None]
-                Ys += [y0 - dy, y0 + dy, None]
-                Zs += [z0,      z0,      None]
-            if Xs:
+    # -------- Attractors over time --------
+    if attr_overlay:
+        if attr_history and isinstance(attr_history, list):
+            # (a) per-frame attractor points sized by amplitude
+            Xp, Yp, Zp, Sz = [], [], [], []
+            # (b) trajectories by id
+            from collections import defaultdict
+            tracks = defaultdict(list)  # id -> [(t,y,x)]
+
+            for frame in attr_history:
+                t = int(frame.get("t", 0))
+                for it in frame.get("items", []):
+                    y, x = int(it.get("pos", (0, 0))[0]), int(it.get("pos", (0, 0))[1])
+                    amp  = float(it.get("amp", 0.0))
+                    Xp.append(x); Yp.append(y); Zp.append(t); Sz.append(2.0 + 6.0 * amp)
+                    tracks[int(it.get("id", -1))].append((t, y, x))
+
+            if Xp:
                 fig.add_trace(go.Scatter3d(
-                    x=np.array(Xs), y=np.array(Ys), z=np.array(Zs),
+                    x=Xp, y=Yp, z=Zp,
+                    mode="markers",
+                    marker=dict(size=Sz, opacity=max(0.15, float(attr_alpha)*0.75)),
+                    name="Attractors (pts over time)"
+                ))
+
+            # Draw trajectories (connect consecutive frames for each id)
+            Xt, Yt, Zt = [], [], []
+            for _id, seq in tracks.items():
+                seq.sort(key=lambda p: p[0])
+                for i in range(len(seq)-1):
+                    t0, y0, x0 = seq[i]
+                    t1, y1, x1 = seq[i+1]
+                    Xt += [x0, x1, None]
+                    Yt += [y0, y1, None]
+                    Zt += [t0, t1, None]
+            if Xt:
+                fig.add_trace(go.Scatter3d(
+                    x=Xt, y=Yt, z=Zt,
                     mode="lines",
                     line=dict(width=4),
                     opacity=float(attr_alpha),
-                    name="Attractors"
+                    name="Attractor tracks"
                 ))
-        except Exception as e:
-            st.info(f"Attractor overlay unavailable ({e}). Continue without it.")
+        else:
+            # Back-compat: just draw the *final* snapshot at z = T-1
+            try:
+                items = get_attractor_items_fn()
+                z0 = S_stack.shape[0] - 1
+                Xs, Ys, Zs = [], [], []
+                for it in items:
+                    pos = it.get("pos", (0, 0))
+                    y0, x0 = int(pos[0]), int(pos[1])
+                    theta = float(it.get("theta", 0.0))
+                    r_par = float(it.get("r_par", 1.0))
+                    amp   = float(it.get("amp", 0.5))
+                    L = max(0.2, r_par) * max(0.2, amp) * float(attr_scale)
+                    dx = L * np.cos(theta); dy = L * np.sin(theta)
+                    Xs += [x0 - dx, x0 + dx, None]
+                    Ys += [y0 - dy, y0 + dy, None]
+                    Zs += [z0,      z0,      None]
+                if Xs:
+                    fig.add_trace(go.Scatter3d(
+                        x=np.array(Xs), y=np.array(Ys), z=np.array(Zs),
+                        mode="lines",
+                        line=dict(width=4),
+                        opacity=float(attr_alpha),
+                        name="Attractors (final)"
+                    ))
+            except Exception as e:
+                st.info(f"Attractor overlay unavailable ({e}). Continue without it.")
 
-    # ——— Keep camera stable & prevent resets ———
+    # -------- Layout --------
     fig.update_layout(
-        uirevision=uirevision,  # tells Plotly "don't reset view if this token doesn't change"
+        uirevision=uirevision,
         scene=dict(
-            camera=(camera or {}),    # lock to a passed-in camera (or leave as-is)
+            camera=(camera or {}),
             aspectmode="data",
             xaxis_title="x", yaxis_title="y", zaxis_title="t",
         ),
@@ -468,8 +513,6 @@ def draw_3d_connections_over_time(
         height=640,
         margin=dict(l=0, r=0, t=40, b=0),
     )
-
-    # Use a STABLE key so Streamlit doesn't remount the widget
     ph.plotly_chart(
         fig,
         use_container_width=True,
@@ -478,7 +521,7 @@ def draw_3d_connections_over_time(
         config=dict(
             scrollZoom=True,
             displaylogo=False,
-            doubleClick="false",  # avoid accidental resets on double‑tap
+            doubleClick="false",
             modeBarButtonsToRemove=[
                 "resetCameraDefault3d", "resetCameraLastSave3d",
                 "autoScale", "toImage"
