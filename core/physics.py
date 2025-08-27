@@ -328,39 +328,6 @@ self.enc_strength = np.zeros(shape, dtype=float)   # in [0,1]
             T = T + self.beta_signal * signal_var
         self.T = T
 
-    # ----------------------------------------
-    # NEW: update encoding maps each timestep
-    # ----------------------------------------
-    def _update_encoding_maps(self, S: np.ndarray):
-        """
-        Track a smooth map of entropy/variance reduction as a proxy for 'encoding'.
-        Higher values => more structured (lower local entropy).
-        """
-        if self.ndim != 2:
-            self._enc_ready = False
-            return
-    
-        # crude measure: local variance of |∇S|
-        Gmag = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
-        ent_field = _box_var2d(Gmag)            # high -> noisy
-        enc_signal = 1.0 / (1.0 + ent_field)    # invert: low entropy -> high encoding
-    
-        # EMA (your style)
-        self.enc_entropy_ema = (
-            float(self.enc_decay) * self.enc_entropy_ema
-            + float(self.enc_gain)  * enc_signal
-        )
-    
-        # keep a normalized [0,1] map for easy consumption elsewhere
-        m = float(np.nanmin(self.enc_entropy_ema)); M = float(np.nanmax(self.enc_entropy_ema))
-        if np.isfinite(m) and np.isfinite(M) and (M - m) > 1e-12:
-            self.enc_strength = (self.enc_entropy_ema - m) / (M - m + 1e-12)
-        else:
-            self.enc_strength = np.zeros_like(self.enc_entropy_ema)
-    
-        self._enc_ready = True
-    
-    
     # =======================
     # Attractors lifecycle
     # =======================
