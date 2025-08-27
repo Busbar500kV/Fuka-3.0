@@ -316,37 +316,6 @@ class LocalState:
             T = T + self.beta_signal * signal_var
         self.T = T
 
-    # =======================
-    # Attractors lifecycle
-    # =======================
-
-    def _entropy_field(self, S: np.ndarray) -> np.ndarray:
-        if self.ndim == 1:
-            return _rolling_var_1d(S, win=max(3, self.entropy_window))
-        # 2D: variance of gradient magnitude
-        Gmag = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
-        return _box_var2d(Gmag)
-
-        def _update_encoding_maps(self, S: np.ndarray):
-        """EMA of entropy; encoding := positive (slow - fast), normalized to [0,1]."""
-        ent = self._entropy_field(S)
-        self._ent_fast = (1.0 - self._alpha_fast) * self._ent_fast + self._alpha_fast * ent
-        self._ent_slow = (1.0 - self._alpha_slow) * self._ent_slow + self._alpha_slow * ent
-        drop = np.maximum(self._ent_slow - self._ent_fast, 0.0)  # where entropy is dropping
-    
-        # robust normalize
-        q05 = float(np.quantile(drop, 0.05)) if drop.size else 0.0
-        q95 = float(np.quantile(drop, 0.95)) if drop.size else 1.0
-        scale = max(1e-12, q95 - q05)
-        enc = np.clip((drop - q05) / scale, 0.0, 1.0)
-    
-        # light smoothing to avoid flicker
-        beta = float(np.clip(self.enc_beta, 0.0, 1.0))
-        self.enc_map = (1.0 - beta) * getattr(self, "enc_map", enc) + beta * enc
-    
-        # NEW: alias so legacy readers still work
-        self.enc_strength = self.enc_map
-        
     # ----------------------------------------
     # MOD: use encoding when spawning
     # ----------------------------------------
@@ -387,7 +356,32 @@ class LocalState:
                 if len(self.attractors) >= self.attr_max:
                     break
     
+    def _entropy_field(self, S: np.ndarray) -> np.ndarray:
+        if self.ndim == 1:
+            return _rolling_var_1d(S, win=max(3, self.entropy_window))
+        Gmag = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
+        return _box_var2d(Gmag)
+
+    def _update_encoding_maps(self, S: np.ndarray):
+        """EMA of entropy; encoding := positive (slow - fast), normalized to [0,1]."""
+        ent = self._entropy_field(S)
+        self._ent_fast = (1.0 - self._alpha_fast) * self._ent_fast + self._alpha_fast * ent
+        self._ent_slow = (1.0 - self._alpha_slow) * self._ent_slow + self._alpha_slow * ent
+        drop = np.maximum(self._ent_slow - self._ent_fast, 0.0)  # where entropy is dropping
     
+        # robust normalize
+        q05 = float(np.quantile(drop, 0.05)) if drop.size else 0.0
+        q95 = float(np.quantile(drop, 0.95)) if drop.size else 1.0
+        scale = max(1e-12, q95 - q05)
+        enc = np.clip((drop - q05) / scale, 0.0, 1.0)
+    
+        # light smoothing to avoid flicker
+        beta = float(np.clip(self.enc_beta, 0.0, 1.0))
+        self.enc_map = (1.0 - beta) * getattr(self, "enc_map", enc) + beta * enc
+    
+        # alias for legacy readers
+        self.enc_strength = self.enc_map
+        
 
     def _maintain_and_decay(self):
         alive: List[Attractor] = []
