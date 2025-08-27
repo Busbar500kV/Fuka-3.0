@@ -168,6 +168,7 @@ class LocalState:
         self.stim_edge_kind    = str(_safe_get(f3S, "edge_kind", "both"))   # "kappa" | "gradS" | "both"
         self.stim_edge_thr     = float(_safe_get(f3S, "edge_thr", 0.85))    # percentile threshold for edge mask
         self.stim_radius_boost = float(_safe_get(f3S, "radius_boost", 1.0)) # widen attractor footprint
+        self.stim_energy_per_unit = float(_safe_get(f3S, "energy_per_unit", 0.0))  # 0.0 = no energy accounting
     
         # energy
         f3E = f3.get("energy", {})
@@ -607,26 +608,32 @@ class LocalState:
     
     def _edge_mask(self, S: np.ndarray) -> np.ndarray:
         """
-        Build a sparse 0/1 mask of likely 'connection edges' to gate where
-        the top-down stimulation is injected.
+        Sparse 0/1 mask of likely 'connection edges' to gate where the
+        top-down stimulation is injected. Combines |∇S| and |kappa|
+        depending on stim_edge_kind: "kappa" | "gradS" | "both".
         """
         if self.ndim != 2 or S.size == 0:
             return np.zeros_like(S, dtype=float)
-
+    
+        def _safe_norm(A: np.ndarray) -> np.ndarray:
+            a = np.asarray(A, dtype=float)
+            lo = float(np.min(a)); hi = float(np.max(a))
+            if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
+                return np.zeros_like(a)
+            return (a - lo) / (hi - lo + 1e-12)
+    
         kind = getattr(self, "stim_edge_kind", "both")
         if kind == "gradS":
             G = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
-            g = (G - np.min(G)) / (1e-12 + np.max(G) - np.min(G))
+            g = _safe_norm(G)
         elif kind == "kappa":
-            K = self.kappa
-            g = (K - np.min(K)) / (1e-12 + np.max(K) - np.min(K))
+            g = _safe_norm(np.abs(self.kappa))
         else:
             G = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
-            gG = (G - np.min(G)) / (1e-12 + np.max(G) - np.min(G))
-            K = self.kappa
-            gK = (K - np.min(K)) / (1e-12 + np.max(K) - np.min(K))
-            g = 0.5 * (gG + gK)
-
+            gG = _safe_norm(G)
+            gK = _safe_norm(np.abs(self.kappa))
+            g  = 0.5 * (gG + gK)
+    
         thr = float(np.clip(getattr(self, "stim_edge_thr", 0.85), 0.0, 1.0))
         q = float(np.quantile(g, thr)) if g.size else 1.0
         return (g >= q).astype(float)
@@ -634,60 +641,89 @@ class LocalState:
     def _stimulus_topdown(self, t_idx: int, S: np.ndarray) -> Optional[np.ndarray]:
         """
         Produce a top-down attractor-driven stimulus the same shape as S.
-        - Structured near strong-encoding areas (low jitter)
-        - Noisy near weak-encoding areas (more jitter + extra noise)
-        Injection is gated to an edge mask so it nudges 'connections'.
+        - Structured near strong encoding (enc_map) AND strong connections (|kappa|)
+        - Noise near weak encoding/connection regions
+        - Aligned with the attractor orientation (projects onto local ∇S)
+        - Gated to edge mask; optionally consumes energy
         """
         if (self.ndim != 2) or (not getattr(self, "stim_enable", False)) or (not self.attractors):
             return None
-
+    
         H, W = S.shape
         edge_m = self._edge_mask(S)
         if not np.any(edge_m):
             return None
+    
+    # enc/strength maps
+    enc = getattr(self, "enc_map", None)
+    if enc is None or enc.shape != S.shape:
+        enc = np.zeros_like(S)
+    kabs = np.abs(self.kappa)
+    # normalize robustly
+    def _safe_norm(A: np.ndarray) -> np.ndarray:
+        lo = float(np.min(A)); hi = float(np.max(A))
+        if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
+            return np.zeros_like(A)
+        return (A - lo) / (hi - lo + 1e-12)
+    enc_n  = _safe_norm(enc)
+    kabs_n = _safe_norm(kabs)
+    # strength: where both encoding and |kappa| are high
+    strength = np.sqrt(np.clip(enc_n, 0, 1) * np.clip(kabs_n, 0, 1))
 
-        enc = getattr(self, "enc_map", None)
-        if enc is None or enc.shape != S.shape:
-            enc = np.zeros_like(S)
+    # local edge orientation (from S)
+    Sx = _grad2d_x(S); Sy = _grad2d_y(S)
 
-        stim = np.zeros((H, W), dtype=float)
+    # global structured carrier
+    w0   = 2.0 * np.pi * float(getattr(self, "stim_freq_hz", 0.15))
+    gain = float(getattr(self, "stim_gain", 0.25))
+    n_g  = float(getattr(self, "stim_noise_gain", 0.35))
 
-        # global, repeatable base
-        w0 = 2.0 * np.pi * float(getattr(self, "stim_freq_hz", 0.15))
-        phi0 = 0.0
+    drive = np.zeros_like(S)
+    for a in self.attractors:
+        y0, x0 = a.pos
+        Wk = a.field(H, W)  # normalized * amp
 
-        # accumulate per-attractor fields
-        for a in self.attractors:
-            y0, x0 = a.pos
-            # footprint (we don't rely on overrides to keep Attractor API stable)
-            Wk = a.field(H, W)  # expected to be normalized * amp already
+        # widen footprint a touch if requested
+        if self.stim_radius_boost > 1.01:
+            G = np.abs(_grad2d_x(Wk)) + np.abs(_grad2d_y(Wk))
+            Wk = np.clip(Wk + (self.stim_radius_boost - 1.0) * G, 0.0, None)
 
-            # widen a bit by simple blur-like trick: add a little of its neighbors via grad magnitude
-            if self.stim_radius_boost > 1.01:
-                # very cheap soft-widen: add portion of local |∇Wk|
-                G = np.abs(_grad2d_x(Wk)) + np.abs(_grad2d_y(Wk))
-                Wk = np.clip(Wk + (self.stim_radius_boost - 1.0) * G, 0.0, None)
+        # encoding at attractor center
+        enc_loc = float(enc_n[y0, x0]) if (0 <= y0 < H and 0 <= x0 < W) else 0.0
 
-            enc_loc = float(enc[y0, x0]) if (0 <= y0 < H and 0 <= x0 < W) else 0.0
+        # jitter down when well-encoded
+        f_jit  = float(getattr(self, "stim_freq_jit", 0.10))  * (1.0 - enc_loc) * self.rng.normal(0.0, 1.0)
+        ph_jit = float(getattr(self, "stim_phase_jit", 0.15)) * (1.0 - enc_loc) * self.rng.normal(0.0, 1.0)
 
-            # encoding-dependent jitter
-            f_jit  = getattr(self, "stim_freq_jit", 0.10) * (1.0 - enc_loc) * self.rng.normal(0.0, 1.0)
-            ph_jit = getattr(self, "stim_phase_jit", 0.15) * (1.0 - enc_loc) * self.rng.normal(0.0, 1.0)
+        carrier = np.sin(w0 * (1.0 + f_jit) * float(t_idx) + ph_jit)
 
-            freq = w0 * (1.0 + f_jit)
-            phi  = phi0 + ph_jit
+        # project along attractor orientation to truly act "on edges"
+        dx = np.cos(a.theta); dy = np.sin(a.theta)
+        edge_proj = dx * Sx + dy * Sy  # signed projection
 
-            sig_struct = np.sin(freq * t_idx + phi)
-            sig_noise  = self.rng.standard_normal()
+        # reward vs penalty
+        d_struct = carrier * edge_proj * strength * Wk
+        d_noise  = (1.0 - strength) * Wk * self.rng.standard_normal(size=(H, W))
 
-            # enc=1 → fully structured; enc=0 → mostly noise (scaled by noise_gain)
-            s = enc_loc * sig_struct + (1.0 - enc_loc) * (getattr(self, "stim_noise_gain", 0.35) * sig_noise)
+        drive += gain * d_struct + n_g * d_noise
 
-            stim += s * Wk
+    # inject only on selected edges
+    drive *= edge_m
 
-        # inject only on edges
-        stim *= edge_m
-        return stim
+    # --- energy accounting (optional) ---
+    epu = float(getattr(self, "stim_energy_per_unit", 0.0))
+    if epu > 0.0:
+        E_units = float(np.mean(np.abs(drive)))  # proxy
+        spent   = epu * E_units
+        dissip  = self.work_to_dissipation_fraction * spent
+        if spent > 0.0:
+            self.F -= spent / max(1, self.F.size)
+        if dissip > 0.0:
+            self.B += dissip / max(1, self.B.size)
+        self._last_spent  += spent
+        self._last_dissip += dissip
+
+    return drive
     
     
     
