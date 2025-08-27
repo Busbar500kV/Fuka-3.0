@@ -11,6 +11,8 @@ import plotly.graph_objects as go
 from core import physics
 from core.engine import Engine
 
+from core import debug as dbg  # ← optional debug helpers
+
 # optional camera controls module (safe if unused)
 try:
     from ui_camera import camera_controls  # noqa: F401
@@ -89,6 +91,10 @@ with st.sidebar.expander("3-D Connections (substrate encoding)", expanded=True):
     conn_stride_t = st.slider("Time stride for connections", 1, 20, int(conn_cfg.get("stride_t", 4)), 1, key="conn:stride")
     conn_max_edges = st.slider("Max edges plotted", 1000, 100000,
                                int(conn_cfg.get("max_edges", max3d if max3d is not None else 40000)), 1000, key="conn:max")
+                            
+    st.markdown("---")
+    dbg_enable = st.checkbox("Debug: measure connections near attractors", value=True, key="conn:dbg")
+    dbg_radius = st.slider("Debug radius (grid cells)", 1, 8, 4, 1, key="conn:dbgR")
 
 # ---------------- Attractors overlay UI ----------------
 with st.sidebar.expander("Attractors overlay (3-D)", expanded=False):
@@ -350,7 +356,7 @@ if run is not None:
             return items
 
         try:
-            draw_3d_connections_over_time(
+            ret = draw_3d_connections_over_time(
                 conn3d_ph,
                 E_stack, S_stack,
                 thr_env=float(conn_thr_env),
@@ -368,10 +374,29 @@ if run is not None:
                 new_key_fn=new_key,
                 attr_history=ah,  # trimmed history
             )
+            # ---------------- Debug: quantify “near attractors” connections ----------------
+            if dbg_enable:
+                # 1) Build a (T,H,W) interest mask from trimmed attr history
+                interest = dbg.build_attractor_interest3d(
+                    attr_history=ah,
+                    stack_shape_T_H_W=E_stack.shape,
+                    radius=int(dbg_radius),
+                )
+                # 2) If the helper returned polylines, partition them
+                if isinstance(ret, dict) and all(k in ret for k in ("conn_x", "conn_y", "conn_z")):
+                    stats = dbg.partition_edges_by_attractors_polylines(
+                        ret["conn_x"], ret["conn_y"], ret["conn_z"], interest
+                    )
+                    st.info("Near-attractor connections: " + dbg.format_counts(stats["counts"]))
+                else:
+                    # Helper didn’t return polylines; silently skip (no breakage)
+                    pass
+            
+            
         except Exception as e:
             st.warning("Attractor overlay failed; rendering connections without overlay.")
             try:
-                draw_3d_connections_over_time(
+                ret = draw_3d_connections_over_time(
                     conn3d_ph,
                     E_stack, S_stack,
                     thr_env=float(conn_thr_env),
@@ -386,8 +411,19 @@ if run is not None:
                     get_attractor_items_fn=_get_attr_items,
                     new_key_fn=new_key,
                 )
-            finally:
-                st.exception(e)
+                if dbg_enable:
+                    interest = dbg.build_attractor_interest3d(
+                        attr_history=ah,
+                        stack_shape_T_H_W=E_stack.shape,
+                        radius=int(dbg_radius),
+                    )
+                    if isinstance(ret, dict) and all(k in ret for k in ("conn_x", "conn_y", "conn_z")):
+                        stats = dbg.partition_edges_by_attractors_polylines(
+                            ret["conn_x"], ret["conn_y"], ret["conn_z"], interest
+                        )
+                        st.info("Near-attractor connections: " + dbg.format_counts(stats["counts"]))
+             finally:
+                 st.exception(e)
     else:
         st.info("Connections view is off. Enable it in the sidebar.")
 
