@@ -165,6 +165,18 @@
     "integration": {
       "sigma_theta": 0.5,
       "fitness_efficiency_mix": 1.0
+    },
+
+    "stimulation": {
+      "enable": true,
+      "gain": 0.30,
+      "freq": 0.12,
+      "phase_jitter": 0.10,
+      "freq_jitter": 0.08,
+      "noise_gain": 0.40,
+      "edge_kind": "both",
+      "edge_thr": 0.80,
+      "radius_boost": 1.25
     }
   }
 }
