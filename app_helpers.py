@@ -378,6 +378,7 @@ def draw_3d_connections_over_time(
     camera: dict | None = None,
     uirevision: str = "conn3d",
     attr_history: list | None = None,   # per-frame attractor snapshots
+    debug_show_midpoints: bool = True,  # <— NEW: plot connection midpoints to inspect alignment
 ):
     """
     Draw Env dots + time-layered substrate connections in 3D.
@@ -389,8 +390,10 @@ def draw_3d_connections_over_time(
     Returns (optional debug):
         {
           "conn_x": [...], "conn_y": [...], "conn_z": [...],
-          "near_attractor_segments": int,
-          "total_segments": int
+          "near_xy": int, "near_yx": int,
+          "total_segments": int,
+          "dist_xy": {"min": float, "median": float},
+          "dist_yx": {"min": float, "median": float}
         }
     """
     import numpy as np
@@ -408,7 +411,7 @@ def draw_3d_connections_over_time(
     if attr_overlay and isinstance(attr_history, list) and len(attr_history) > 0:
         ts = [int(fr.get("t", 0)) for fr in attr_history if isinstance(fr, dict)]
         if ts:
-            pad = max(2, int(max(1, stride_t)))  # small padding around the visible attractor window
+            pad = max(2, int(max(1, stride_t)))  # small padding
             t_lo = max(0, min(ts) - pad)
             t_hi = min(T - 1, max(ts) + pad)
 
@@ -449,7 +452,10 @@ def draw_3d_connections_over_time(
 
     conn_x, conn_y, conn_z = [], [], []
     total_segments = 0
-    near_segments = 0
+    near_xy = 0
+    near_yx = 0
+    dlist_xy = []
+    dlist_yx = []
 
     if xs_all:
         xs_all = np.concatenate(xs_all)
@@ -460,8 +466,7 @@ def draw_3d_connections_over_time(
         conn_y = ys_all.tolist()
         conn_z = zs_all.tolist()
 
-        # --- Proximity-to-attractor counting (same-frame, within radius_px) ---
-        # Build t -> list of (x,y) attractor points from attr_history in current window.
+        # --- Build per-frame attractor sets ---
         attr_pts_by_t = {}
         if attr_overlay and isinstance(attr_history, list):
             for frame in attr_history:
@@ -471,11 +476,13 @@ def draw_3d_connections_over_time(
                 pts = attr_pts_by_t.setdefault(t, [])
                 for it in frame.get("items", []):
                     y, x = int(it.get("pos", (0, 0))[0]), int(it.get("pos", (0, 0))[1])
-                    pts.append((x, y))  # store as (x,y)
+                    # store both orderings (for fast checks below)
+                    pts.append((float(x), float(y)))  # (x,y)
+                # No dedup; lists are small
 
-        # Iterate segments encoded as triplets [x0, x1, None], same for y/z.
-        # Count a segment "near" if its midpoint is within radius_px of any
-        # attractor point at the same frame (z).
+        # --- Collect midpoints for optional plotting & distance stats ---
+        mid_x, mid_y, mid_z = [], [], []
+
         radius_px = 3.0
         r2 = radius_px * radius_px
         n = len(xs_all)
@@ -485,58 +492,64 @@ def draw_3d_connections_over_time(
             y0, y1, yN = ys_all[i], ys_all[i+1], ys_all[i+2]
             z0, z1, zN = zs_all[i], zs_all[i+1], zs_all[i+2]
             i += 3
-            # ensure it's a valid segment (triplet pattern) and same time
-            if x0 is None or x1 is None or xN is not None:
-                continue
-            if y0 is None or y1 is None or yN is not None:
-                continue
-            if z0 is None or z1 is None or zN is not None:
-                continue
-            if z0 != z1:
-                continue
+
+            # valid triplet and same time?
+            if x0 is None or x1 is None or xN is not None:  continue
+            if y0 is None or y1 is None or yN is not None:  continue
+            if z0 is None or z1 is None or zN is not None:  continue
+            if z0 != z1:                                    continue
 
             total_segments += 1
             t = int(z0)
-            pts = attr_pts_by_t.get(t)
-            if not pts:
-                continue
+            pts_xy = attr_pts_by_t.get(t, [])
 
             xm = 0.5 * (float(x0) + float(x1))
             ym = 0.5 * (float(y0) + float(y1))
-            # quick linear scan (grids are small; no SciPy KDTree dependency)
-            near = False
-            for (ax, ay) in pts:
-                dx = xm - float(ax)
-                dy = ym - float(ay)
-                if dx*dx + dy*dy <= r2:
-                    near = True
-                    break
-            if near:
-                near_segments += 1
 
-        # Add the connections trace
+            if debug_show_midpoints:
+                mid_x.append(xm); mid_y.append(ym); mid_z.append(t)
+
+            # If we have points this frame, compute nearest distance (both mappings)
+            if pts_xy:
+                # mapping 1: (x,y) as-is
+                d2_xy = min((xm - ax)**2 + (ym - ay)**2 for (ax, ay) in pts_xy)
+                dlist_xy.append(d2_xy**0.5)
+                if d2_xy <= r2:
+                    near_xy += 1
+
+                # mapping 2: swap interpretation (treat our (x,y) as (y,x))
+                # i.e., compare (ym,xm) to (ax,ay)
+                d2_yx = min((ym - ax)**2 + (xm - ay)**2 for (ax, ay) in pts_xy)
+                dlist_yx.append(d2_yx**0.5)
+                if d2_yx <= r2:
+                    near_yx += 1
+
+        # plot the connections
         fig.add_trace(go.Scatter3d(
             x=xs_all, y=ys_all, z=zs_all,
             mode="lines",
             line=dict(width=2),
             name="Substrate connections"
         ))
-    else:
-        # No connections at all in the window
-        total_segments = 0
-        near_segments = 0
+
+        # optional: midpoints to visually inspect alignment
+        if debug_show_midpoints and mid_x:
+            fig.add_trace(go.Scatter3d(
+                x=np.array(mid_x), y=np.array(mid_y), z=np.array(mid_z),
+                mode="markers",
+                marker=dict(size=2, opacity=0.35),
+                name="Conn midpoints"
+            ))
 
     # -------- Attractors over time --------
     if attr_overlay:
         if attr_history and isinstance(attr_history, list):
-            # points + tracks
             Xp, Yp, Zp, Sz = [], [], [], []
             from collections import defaultdict
             tracks = defaultdict(list)  # id -> [(t,y,x)]
 
             for frame in attr_history:
                 t = int(frame.get("t", 0))
-                # skip attractors outside our plotting time window (shouldn't happen with the trim above, but safe)
                 if t < t_lo or t > t_hi:
                     continue
                 for it in frame.get("items", []):
@@ -559,7 +572,6 @@ def draw_3d_connections_over_time(
                 for i in range(len(seq)-1):
                     t0, y0, x0 = seq[i]
                     t1, y1, x1 = seq[i+1]
-                    # only connect if the segment stays inside the window
                     if (t0 < t_lo or t0 > t_hi) or (t1 < t_lo or t1 > t_hi):
                         continue
                     Xt += [x0, x1, None]
@@ -574,7 +586,6 @@ def draw_3d_connections_over_time(
                     name="Attractor tracks"
                 ))
         else:
-            # Back-compat: single final snapshot
             try:
                 items = get_attractor_items_fn()
                 z0 = min(max(T - 1, t_lo), t_hi)
@@ -599,13 +610,24 @@ def draw_3d_connections_over_time(
                         name="Attractors (final)"
                     ))
             except Exception as e:
-                st.info(f"Attractor overlay unavailable ({e}). Continue without it.")
+                st.info(f"Attractor overlay unavailable ({e}). Continue without it.)")
 
-    # -------- Layout (title includes proximity stats if available) --------
+    # -------- Title & diagnostics --------
+    def _stats(vals):
+        if not vals:
+            return {"min": float("inf"), "median": float("inf")}
+        a = np.asarray(vals, dtype=float)
+        return {"min": float(np.min(a)), "median": float(np.median(a))}
+
+    stats_xy = _stats(dlist_xy)
+    stats_yx = _stats(dlist_yx)
+
     title_txt = "3-D connections"
     if total_segments > 0:
-        ratio = 100.0 * near_segments / float(total_segments)
-        title_txt += f" — Near-attractor connections: {near_segments}/{total_segments} ({ratio:.1f}%)"
+        r_xy = 100.0 * near_xy / float(total_segments)
+        r_yx = 100.0 * near_yx / float(total_segments)
+        title_txt += (f" — near@XY: {near_xy}/{total_segments} ({r_xy:.1f}%), "
+                      f"near@YX: {near_yx}/{total_segments} ({r_yx:.1f}%)")
 
     fig.update_layout(
         title=title_txt,
@@ -636,10 +658,22 @@ def draw_3d_connections_over_time(
         ),
     )
 
+    # Also drop a caption with distance diagnostics for quick reading.
+    try:
+        st.caption(
+            f"Distance stats — mapping XY: min {stats_xy['min']:.2f}, med {stats_xy['median']:.2f} | "
+            f"mapping YX: min {stats_yx['min']:.2f}, med {stats_yx['median']:.2f}"
+        )
+    except Exception:
+        pass
+
     return {
         "conn_x": conn_x,
         "conn_y": conn_y,
         "conn_z": conn_z,
-        "near_attractor_segments": int(near_segments),
+        "near_xy": int(near_xy),
+        "near_yx": int(near_yx),
         "total_segments": int(total_segments),
+        "dist_xy": {"min": float(stats_xy["min"]), "median": float(stats_xy["median"])},
+        "dist_yx": {"min": float(stats_yx["min"]), "median": float(stats_yx["median"])},
     }
