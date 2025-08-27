@@ -422,8 +422,8 @@ if run is not None:
                             ret["conn_x"], ret["conn_y"], ret["conn_z"], interest
                         )
                         st.info("Near-attractor connections: " + dbg.format_counts(stats["counts"]))
-             finally:
-                 st.exception(e)
+            finally:
+                st.exception(e)
     else:
         st.info("Connections view is off. Enable it in the sidebar.")
 
