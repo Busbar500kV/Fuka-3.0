@@ -387,10 +387,15 @@ def draw_3d_connections_over_time(
     time range (+/- a small padding) so proximity checks are meaningful.
 
     Returns (optional debug):
-        {"conn_x": [...], "conn_y": [...], "conn_z": [...]}
+        {
+          "conn_x": [...], "conn_y": [...], "conn_z": [...],
+          "near_attractor_segments": int,
+          "total_segments": int
+        }
     """
     import numpy as np
     import plotly.graph_objects as go
+    import streamlit as st
 
     fig = go.Figure()
 
@@ -443,6 +448,9 @@ def draw_3d_connections_over_time(
         xs_all.append(xs); ys_all.append(ys); zs_all.append(zs)
 
     conn_x, conn_y, conn_z = [], [], []
+    total_segments = 0
+    near_segments = 0
+
     if xs_all:
         xs_all = np.concatenate(xs_all)
         ys_all = np.concatenate(ys_all)
@@ -452,12 +460,71 @@ def draw_3d_connections_over_time(
         conn_y = ys_all.tolist()
         conn_z = zs_all.tolist()
 
+        # --- Proximity-to-attractor counting (same-frame, within radius_px) ---
+        # Build t -> list of (x,y) attractor points from attr_history in current window.
+        attr_pts_by_t = {}
+        if attr_overlay and isinstance(attr_history, list):
+            for frame in attr_history:
+                t = int(frame.get("t", 0))
+                if t < t_lo or t > t_hi:
+                    continue
+                pts = attr_pts_by_t.setdefault(t, [])
+                for it in frame.get("items", []):
+                    y, x = int(it.get("pos", (0, 0))[0]), int(it.get("pos", (0, 0))[1])
+                    pts.append((x, y))  # store as (x,y)
+
+        # Iterate segments encoded as triplets [x0, x1, None], same for y/z.
+        # Count a segment "near" if its midpoint is within radius_px of any
+        # attractor point at the same frame (z).
+        radius_px = 3.0
+        r2 = radius_px * radius_px
+        n = len(xs_all)
+        i = 0
+        while i + 2 < n:
+            x0, x1, xN = xs_all[i], xs_all[i+1], xs_all[i+2]
+            y0, y1, yN = ys_all[i], ys_all[i+1], ys_all[i+2]
+            z0, z1, zN = zs_all[i], zs_all[i+1], zs_all[i+2]
+            i += 3
+            # ensure it's a valid segment (triplet pattern) and same time
+            if x0 is None or x1 is None or xN is not None:
+                continue
+            if y0 is None or y1 is None or yN is not None:
+                continue
+            if z0 is None or z1 is None or zN is not None:
+                continue
+            if z0 != z1:
+                continue
+
+            total_segments += 1
+            t = int(z0)
+            pts = attr_pts_by_t.get(t)
+            if not pts:
+                continue
+
+            xm = 0.5 * (float(x0) + float(x1))
+            ym = 0.5 * (float(y0) + float(y1))
+            # quick linear scan (grids are small; no SciPy KDTree dependency)
+            near = False
+            for (ax, ay) in pts:
+                dx = xm - float(ax)
+                dy = ym - float(ay)
+                if dx*dx + dy*dy <= r2:
+                    near = True
+                    break
+            if near:
+                near_segments += 1
+
+        # Add the connections trace
         fig.add_trace(go.Scatter3d(
             x=xs_all, y=ys_all, z=zs_all,
             mode="lines",
             line=dict(width=2),
             name="Substrate connections"
         ))
+    else:
+        # No connections at all in the window
+        total_segments = 0
+        near_segments = 0
 
     # -------- Attractors over time --------
     if attr_overlay:
@@ -534,8 +601,14 @@ def draw_3d_connections_over_time(
             except Exception as e:
                 st.info(f"Attractor overlay unavailable ({e}). Continue without it.")
 
-    # -------- Layout --------
+    # -------- Layout (title includes proximity stats if available) --------
+    title_txt = "3-D connections"
+    if total_segments > 0:
+        ratio = 100.0 * near_segments / float(total_segments)
+        title_txt += f" — Near-attractor connections: {near_segments}/{total_segments} ({ratio:.1f}%)"
+
     fig.update_layout(
+        title=title_txt,
         uirevision=uirevision,
         scene=dict(
             camera=(camera or {}),
@@ -563,4 +636,10 @@ def draw_3d_connections_over_time(
         ),
     )
 
-    return {"conn_x": conn_x, "conn_y": conn_y, "conn_z": conn_z}
+    return {
+        "conn_x": conn_x,
+        "conn_y": conn_y,
+        "conn_z": conn_z,
+        "near_attractor_segments": int(near_segments),
+        "total_segments": int(total_segments),
+    }
