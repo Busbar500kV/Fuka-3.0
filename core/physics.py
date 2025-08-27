@@ -326,33 +326,48 @@ class LocalState:
             return
     
         H, W = self.shape
-        Eabs = np.abs(env_like)
-        if Eabs.size == 0:
+        if env_like.size == 0:
             return
-        En = Eabs / (1e-12 + np.max(Eabs))
-        trials = max(1, min(self.attr_spawn_trials, self.attr_max - len(self.attractors)))
     
+        # normalized env magnitude
+        Eabs = np.abs(env_like)
+        En = Eabs / (1e-12 + np.max(Eabs))
+    
+        trials = max(1, min(self.attr_spawn_trials, self.attr_max - len(self.attractors)))
         for _ in range(trials):
             y = int(self.rng.integers(0, H))
             x = int(self.rng.integers(0, W))
-            bias = float(En[y, x])
-            p_spawn = self.attr_spawn_prob_base * (1.0 + self.attr_spawn_bias_w_env * bias)
+    
+            env_loc = float(En[y, x])
+            enc_loc = float(self._encoding_at(y, x))  # [0,1]
+    
+            # base prob × env bias × encoding bias
+            p_base  = self.attr_spawn_prob_base * (1.0 + self.attr_spawn_bias_w_env * env_loc)
+            p_spawn = p_base * (1.0 + self.enc_spawn_env_coeff * env_loc + self.enc_spawn_enc_coeff * enc_loc)
+    
             if (self.rng.random() < p_spawn) and (self.F[y, x] >= self.attr_spawn_energy):
+                # draw base geometry
                 r_par  = float(self.rng.uniform(*self.r_par_rng))
                 r_perp = float(self.rng.uniform(*self.r_perp_rng))
                 theta  = float(self.rng.uniform(-np.pi, np.pi))
-                amp    = float(self.attr_amp_init)
     
-                # encoding-driven noise (NEW behavior)
+                # encoding-driven newborn params
+                r_par  *= (1.0 + self.enc_radius_par_mult  * enc_loc)
+                r_perp *= (1.0 + self.enc_radius_perp_mult * enc_loc)
+                amp     = float(self.attr_amp_init * (1.0 + self.enc_amp_mult * enc_loc))
+    
+                # lower noise where encoding is strong
                 sig_theta, sig_signal = self._noise_from_encoding(y, x)
     
+                # pay energy & spawn
                 self.F[y, x] -= self.attr_spawn_energy
                 self.B[y, x] += self.work_to_dissipation_fraction * self.attr_spawn_energy
                 k = Attractor(self._next_attr_id, (y, x), r_par, r_perp, theta,
                               amp, self.attr_maint_rate, self.attr_decay,
-                              sigma_theta=sig_theta, sigma_signal=sig_signal)
+                              sigma_theta=float(sig_theta), sigma_signal=float(sig_signal))
                 self._next_attr_id += 1
                 self.attractors.append(k)
+    
                 if len(self.attractors) >= self.attr_max:
                     break
     
