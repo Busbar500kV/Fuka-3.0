@@ -334,14 +334,8 @@ if run is not None:
 
     # --------- 3-D connections (helper) ---------
     if conn_enable and (conn_max_edges is not None):
-        # Trim overlay to keep payload bounded (prevents front-end blow-ups)
-        ah = attr_history_all
-        if attr_enable and isinstance(ah, list) and len(ah) > 0:
-            k = int(st.session_state.get("attr:max_frames", 40))
-            if len(ah) > k:
-                ah = ah[-k:]
-        else:
-            ah = None
+        # Use full per-frame attractor history so proximity matches entire run
+        ah = attr_history_all if (attr_enable and isinstance(attr_history_all, list) and len(attr_history_all) > 0) else None
 
         def _get_attr_items():
             if not hasattr(physics, "get_attractors_snapshot"):
