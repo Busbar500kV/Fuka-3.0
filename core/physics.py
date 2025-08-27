@@ -654,76 +654,76 @@ class LocalState:
         if not np.any(edge_m):
             return None
     
-    # enc/strength maps
-    enc = getattr(self, "enc_map", None)
-    if enc is None or enc.shape != S.shape:
-        enc = np.zeros_like(S)
-    kabs = np.abs(self.kappa)
-    # normalize robustly
-    def _safe_norm(A: np.ndarray) -> np.ndarray:
-        lo = float(np.min(A)); hi = float(np.max(A))
-        if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
-            return np.zeros_like(A)
-        return (A - lo) / (hi - lo + 1e-12)
-    enc_n  = _safe_norm(enc)
-    kabs_n = _safe_norm(kabs)
-    # strength: where both encoding and |kappa| are high
-    strength = np.sqrt(np.clip(enc_n, 0, 1) * np.clip(kabs_n, 0, 1))
-
-    # local edge orientation (from S)
-    Sx = _grad2d_x(S); Sy = _grad2d_y(S)
-
-    # global structured carrier
-    w0   = 2.0 * np.pi * float(getattr(self, "stim_freq_hz", 0.15))
-    gain = float(getattr(self, "stim_gain", 0.25))
-    n_g  = float(getattr(self, "stim_noise_gain", 0.35))
-
-    drive = np.zeros_like(S)
-    for a in self.attractors:
-        y0, x0 = a.pos
-        Wk = a.field(H, W)  # normalized * amp
-
-        # widen footprint a touch if requested
-        if self.stim_radius_boost > 1.01:
-            G = np.abs(_grad2d_x(Wk)) + np.abs(_grad2d_y(Wk))
-            Wk = np.clip(Wk + (self.stim_radius_boost - 1.0) * G, 0.0, None)
-
-        # encoding at attractor center
-        enc_loc = float(enc_n[y0, x0]) if (0 <= y0 < H and 0 <= x0 < W) else 0.0
-
-        # jitter down when well-encoded
-        f_jit  = float(getattr(self, "stim_freq_jit", 0.10))  * (1.0 - enc_loc) * self.rng.normal(0.0, 1.0)
-        ph_jit = float(getattr(self, "stim_phase_jit", 0.15)) * (1.0 - enc_loc) * self.rng.normal(0.0, 1.0)
-
-        carrier = np.sin(w0 * (1.0 + f_jit) * float(t_idx) + ph_jit)
-
-        # project along attractor orientation to truly act "on edges"
-        dx = np.cos(a.theta); dy = np.sin(a.theta)
-        edge_proj = dx * Sx + dy * Sy  # signed projection
-
-        # reward vs penalty
-        d_struct = carrier * edge_proj * strength * Wk
-        d_noise  = (1.0 - strength) * Wk * self.rng.standard_normal(size=(H, W))
-
-        drive += gain * d_struct + n_g * d_noise
-
-    # inject only on selected edges
-    drive *= edge_m
-
-    # --- energy accounting (optional) ---
-    epu = float(getattr(self, "stim_energy_per_unit", 0.0))
-    if epu > 0.0:
-        E_units = float(np.mean(np.abs(drive)))  # proxy
-        spent   = epu * E_units
-        dissip  = self.work_to_dissipation_fraction * spent
-        if spent > 0.0:
-            self.F -= spent / max(1, self.F.size)
-        if dissip > 0.0:
-            self.B += dissip / max(1, self.B.size)
-        self._last_spent  += spent
-        self._last_dissip += dissip
-
-    return drive
+        # enc/strength maps
+        enc = getattr(self, "enc_map", None)
+        if enc is None or enc.shape != S.shape:
+            enc = np.zeros_like(S)
+        kabs = np.abs(self.kappa)
+        # normalize robustly
+        def _safe_norm(A: np.ndarray) -> np.ndarray:
+            lo = float(np.min(A)); hi = float(np.max(A))
+            if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
+                return np.zeros_like(A)
+            return (A - lo) / (hi - lo + 1e-12)
+        enc_n  = _safe_norm(enc)
+        kabs_n = _safe_norm(kabs)
+        # strength: where both encoding and |kappa| are high
+        strength = np.sqrt(np.clip(enc_n, 0, 1) * np.clip(kabs_n, 0, 1))
+    
+        # local edge orientation (from S)
+        Sx = _grad2d_x(S); Sy = _grad2d_y(S)
+    
+        # global structured carrier
+        w0   = 2.0 * np.pi * float(getattr(self, "stim_freq_hz", 0.15))
+        gain = float(getattr(self, "stim_gain", 0.25))
+        n_g  = float(getattr(self, "stim_noise_gain", 0.35))
+    
+        drive = np.zeros_like(S)
+        for a in self.attractors:
+            y0, x0 = a.pos
+            Wk = a.field(H, W)  # normalized * amp
+    
+            # widen footprint a touch if requested
+            if self.stim_radius_boost > 1.01:
+                G = np.abs(_grad2d_x(Wk)) + np.abs(_grad2d_y(Wk))
+                Wk = np.clip(Wk + (self.stim_radius_boost - 1.0) * G, 0.0, None)
+    
+            # encoding at attractor center
+            enc_loc = float(enc_n[y0, x0]) if (0 <= y0 < H and 0 <= x0 < W) else 0.0
+    
+            # jitter down when well-encoded
+            f_jit  = float(getattr(self, "stim_freq_jit", 0.10))  * (1.0 - enc_loc) * self.rng.normal(0.0, 1.0)
+            ph_jit = float(getattr(self, "stim_phase_jit", 0.15)) * (1.0 - enc_loc) * self.rng.normal(0.0, 1.0)
+    
+            carrier = np.sin(w0 * (1.0 + f_jit) * float(t_idx) + ph_jit)
+    
+            # project along attractor orientation to truly act "on edges"
+            dx = np.cos(a.theta); dy = np.sin(a.theta)
+            edge_proj = dx * Sx + dy * Sy  # signed projection
+    
+            # reward vs penalty
+            d_struct = carrier * edge_proj * strength * Wk
+            d_noise  = (1.0 - strength) * Wk * self.rng.standard_normal(size=(H, W))
+    
+            drive += gain * d_struct + n_g * d_noise
+    
+        # inject only on selected edges
+        drive *= edge_m
+    
+        # --- energy accounting (optional) ---
+        epu = float(getattr(self, "stim_energy_per_unit", 0.0))
+        if epu > 0.0:
+            E_units = float(np.mean(np.abs(drive)))  # proxy
+            spent   = epu * E_units
+            dissip  = self.work_to_dissipation_fraction * spent
+            if spent > 0.0:
+                self.F -= spent / max(1, self.F.size)
+            if dissip > 0.0:
+                self.B += dissip / max(1, self.B.size)
+            self._last_spent  += spent
+            self._last_dissip += dissip
+    
+        return drive
     
     
     
