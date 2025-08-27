@@ -841,9 +841,8 @@ def get_fuka3_metrics():
 
             # --- other counters / bookkeeping ---
             attrs_alive = len(getattr(st, "attractors", []))
-            avg_reward  = float(np.mean([a.reward_avg for a in st.attractors])) if attrs_alive else 0.0
-            last_spent  = float(getattr(st, "_last_spent", 0.0))
-            last_diss   = float(getattr(st, "_last_dissip", 0.0))
+            avg_reward  = float(np.mean([getattr(a, "reward_avg", 0.0) for a in st.attractors])) if attrs_alive else 0.0
+            last_spent  = float(getattr(st, "_last_spent", 0.0))            last_diss   = float(getattr(st, "_last_dissip", 0.0))
             conn_alive  = int(np.sum(np.abs(st.kappa) > 1e-6))
             eff_ratio   = (ent_mean_S / (last_spent + 1e-12)) if last_spent > 0.0 else 0.0
 
