@@ -356,6 +356,7 @@ def _select_edges_windowed(S_stack: np.ndarray,
         xs += [xx,   xx, None]; ys += [yy, yy+1, None]; zs += [z,  z,  None]
     return np.array(xs), np.array(ys), np.array(zs)
 
+
 def draw_3d_connections_over_time(
     ph,
     E_stack: np.ndarray,
@@ -380,18 +381,15 @@ def draw_3d_connections_over_time(
 ):
     """
     Draw Env dots + time-layered substrate connections in 3D.
-    If `attr_history` is provided as a list of {"t": int, "items":[{id, pos(y,x), amp}]},
-    we plot (a) per-frame attractor points and (b) trajectories (by id) across time.
 
-    Returns (non-breaking extra):
-        dict with the exact polylines sent to Plotly for the connections layer:
-        {
-          "conn_x": List[float|None],
-          "conn_y": List[float|None],
-          "conn_z": List[float|None],
-        }
-        (Lists use None separators between individual segments/polylines.)
+    If `attr_history` is provided as [{"t": int, "items":[{id, pos(y,x), amp}]}],
+    we (a) draw those attractors and (b) restrict connection segments to the same
+    time range (+/- a small padding) so proximity checks are meaningful.
+
+    Returns (optional debug):
+        {"conn_x": [...], "conn_y": [...], "conn_z": [...]}
     """
+    import numpy as np
     import plotly.graph_objects as go
 
     fig = go.Figure()
@@ -399,12 +397,23 @@ def draw_3d_connections_over_time(
     # -------- Env points (sparse) --------
     _draw_3d_env_points(fig, E_stack, thr=thr_env, portion=0.30, cap_pts=150000)
 
-    # -------- Substrate connections over time --------
+    # -------- Determine time range if we have attr_history --------
     T, H, W = S_stack.shape
+    t_lo, t_hi = 0, T - 1
+    if attr_overlay and isinstance(attr_history, list) and len(attr_history) > 0:
+        ts = [int(fr.get("t", 0)) for fr in attr_history if isinstance(fr, dict)]
+        if ts:
+            pad = max(2, int(max(1, stride_t)))  # small padding around the visible attractor window
+            t_lo = max(0, min(ts) - pad)
+            t_hi = min(T - 1, max(ts) + pad)
+
+    # -------- Substrate connections over time (restricted to [t_lo, t_hi]) --------
     xs_all, ys_all, zs_all = [], [], []
     budget = int(max_edges_total)
 
-    for t in range(base_win + eval_win - 1, T, max(1, int(stride_t))):
+    # windows end at t (so they cover [t-(base_win+eval_win-1) ... t])
+    t_start = max(base_win + eval_win - 1, t_lo)
+    for t in range(t_start, t_hi + 1, max(1, int(stride_t))):
         xs, ys, zs = _select_edges_windowed(
             S_stack, t_end=t,
             base_win=int(base_win), eval_win=int(eval_win),
@@ -413,7 +422,7 @@ def draw_3d_connections_over_time(
         if xs.size == 0:
             continue
 
-        # budget guard (keep full "triplets" = [x0,x1,None])
+        # budget guard (keep full triplets [x0,x1,None])
         if (len(xs_all) + len(xs)) > budget:
             keep = max(0, budget - len(xs_all))
             if keep <= 0:
@@ -427,7 +436,9 @@ def draw_3d_connections_over_time(
                     xs_t += [xs[i], xs[i+1], None]
                     ys_t += [ys[i], ys[i+1], None]
                     zs_t += [zs[i], zs[i+1], None]
-                xs, ys, zs = np.array(xs_t, dtype=object), np.array(ys_t, dtype=object), np.array(zs_t, dtype=object)
+                xs = np.array(xs_t, dtype=object)
+                ys = np.array(ys_t, dtype=object)
+                zs = np.array(zs_t, dtype=object)
 
         xs_all.append(xs); ys_all.append(ys); zs_all.append(zs)
 
@@ -437,8 +448,6 @@ def draw_3d_connections_over_time(
         ys_all = np.concatenate(ys_all)
         zs_all = np.concatenate(zs_all)
 
-        # Capture the exact polylines we’re about to plot (None-separated).
-        # Using .tolist() preserves None separators (dtype=object arrays).
         conn_x = xs_all.tolist()
         conn_y = ys_all.tolist()
         conn_z = zs_all.tolist()
@@ -453,14 +462,16 @@ def draw_3d_connections_over_time(
     # -------- Attractors over time --------
     if attr_overlay:
         if attr_history and isinstance(attr_history, list):
-            # (a) per-frame attractor points sized by amplitude
+            # points + tracks
             Xp, Yp, Zp, Sz = [], [], [], []
-            # (b) trajectories by id
             from collections import defaultdict
             tracks = defaultdict(list)  # id -> [(t,y,x)]
 
             for frame in attr_history:
                 t = int(frame.get("t", 0))
+                # skip attractors outside our plotting time window (shouldn't happen with the trim above, but safe)
+                if t < t_lo or t > t_hi:
+                    continue
                 for it in frame.get("items", []):
                     y, x = int(it.get("pos", (0, 0))[0]), int(it.get("pos", (0, 0))[1])
                     amp  = float(it.get("amp", 0.0))
@@ -475,13 +486,15 @@ def draw_3d_connections_over_time(
                     name="Attractors (pts over time)"
                 ))
 
-            # Draw trajectories (connect consecutive frames for each id)
             Xt, Yt, Zt = [], [], []
             for _id, seq in tracks.items():
                 seq.sort(key=lambda p: p[0])
                 for i in range(len(seq)-1):
                     t0, y0, x0 = seq[i]
                     t1, y1, x1 = seq[i+1]
+                    # only connect if the segment stays inside the window
+                    if (t0 < t_lo or t0 > t_hi) or (t1 < t_lo or t1 > t_hi):
+                        continue
                     Xt += [x0, x1, None]
                     Yt += [y0, y1, None]
                     Zt += [t0, t1, None]
@@ -494,10 +507,10 @@ def draw_3d_connections_over_time(
                     name="Attractor tracks"
                 ))
         else:
-            # Back-compat: just draw the *final* snapshot at z = T-1
+            # Back-compat: single final snapshot
             try:
                 items = get_attractor_items_fn()
-                z0 = S_stack.shape[0] - 1
+                z0 = min(max(T - 1, t_lo), t_hi)
                 Xs, Ys, Zs = [], [], []
                 for it in items:
                     pos = it.get("pos", (0, 0))
@@ -550,5 +563,4 @@ def draw_3d_connections_over_time(
         ),
     )
 
-    # Non-breaking extra info for optional debug/analysis
     return {"conn_x": conn_x, "conn_y": conn_y, "conn_z": conn_z}
