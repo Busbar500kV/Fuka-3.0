@@ -141,42 +141,44 @@ _GLOBAL_TICK = 0
 
 class LocalState:
     def __init__(self, shape: Tuple[int, ...],
-                 cfg_phys: Dict[str, Any],
-                 cfg_f3: Optional[Dict[str, Any]],
-                 rng: np.random.Generator):
+             cfg_phys: Dict[str, Any],
+             cfg_f3: Optional[Dict[str, Any]],
+             rng: np.random.Generator):
         self.shape = shape
         self.ndim = len(shape)
         self.rng = rng
         self.t_idx = 0
-
-        # legacy physics knobs
+    
+        # ---------- legacy physics knobs ----------
         self.T_base = float(_safe_get(cfg_phys, "T", 0.001))
         self.flux_limit = float(_safe_get(cfg_phys, "flux_limit", 0.2))
         self.boundary_leak = float(_safe_get(cfg_phys, "boundary_leak", 0.0))
-
-        # fuka3: energy
+    
+        # ---------- fuka3 config ----------
         f3 = cfg_f3 or {}
+    
+        # energy
         f3E = f3.get("energy", {})
         self.source_rate  = float(_safe_get(f3E, "source_rate", 1.0))
         self.transport_conductance = float(_safe_get(f3E, "transport_conductance", 0.15))
         self.work_to_dissipation_fraction = float(_safe_get(f3E, "work_to_dissipation_fraction", 0.9))
         self.step_cost_coeff = float(_safe_get(f3E, "step_cost_coeff", 0.01))
         self.alpha_energy_per_entropy = float(_safe_get(f3E, "alpha_energy_per_entropy", 1.0))
-
-        # fuka3: temperature
+    
+        # temperature
         f3T = f3.get("temperature", {})
         self.T0 = float(_safe_get(f3T, "T0", self.T_base))
         self.beta_bound = float(_safe_get(f3T, "beta_bound", 0.01))
         self.beta_signal = float(_safe_get(f3T, "beta_signal", 0.0))
-
-        # fuka3: EMA (for encoding / entropy-drop)
+    
+        # EMA (for encoding / entropy-drop)
         f3EMA = f3.get("ema", {})
         self.tau_fast = int(_safe_get(f3EMA, "tau_var_fast", 4))
         self.tau_slow = int(_safe_get(f3EMA, "tau_var_slow", 32))
         self._alpha_fast = 1.0 / max(1, self.tau_fast)
         self._alpha_slow = 1.0 / max(1, self.tau_slow)
-
-        # fuka3: connections
+    
+        # connections / denoising
         f3C = f3.get("connection", {})
         f3Ci = f3C.get("init", {})
         f3Cl = f3C.get("learning", {})
@@ -185,111 +187,97 @@ class LocalState:
         self.entropy_kind = str(_safe_get(f3Cl, "entropy_kind", "variance"))
         self.use_sinusoid = bool(_safe_get(f3.get("denoising", {}), "use_sinusoid_term", True))
         self.kappa_scale = float(_safe_get(f3.get("denoising", {}), "kappa_scale", 1.0))
-        self.grad_clip = float(_safe_get(f3.get("denoising", {}), "gradient_clip", 1.0))
-
-        self.A_range = tuple(_safe_get(f3Ci, "amplitude_range", (0.05, 0.15)))
-        self.f_range = tuple(_safe_get(f3Ci, "frequency_range", (0.05, 0.25)))
-        self.phi_range = tuple(_safe_get(f3Ci, "phase_range", (0.0, 2*np.pi)))
-        self.kappa_range = tuple(_safe_get(f3Ci, "curvature_range", (0.0, 0.1)))
+        self.grad_clip   = float(_safe_get(f3.get("denoising", {}), "gradient_clip", 1.0))
+    
+        self.A_range       = tuple(_safe_get(f3Ci, "amplitude_range", (0.05, 0.15)))
+        self.f_range       = tuple(_safe_get(f3Ci, "frequency_range", (0.05, 0.25)))
+        self.phi_range     = tuple(_safe_get(f3Ci, "phase_range", (0.0, 2*np.pi)))
+        self.kappa_range   = tuple(_safe_get(f3Ci, "curvature_range", (0.0, 0.1)))
         self.plasticity_range = tuple(_safe_get(f3Ci, "plasticity_range", (0.01, 0.05)))
-
-        # fuka3: attractors (Option-B)
+    
+        # attractors (Option-B)
         f3A = f3.get("attractors", {})
         self.attr_spawn_prob_base  = float(_safe_get(f3A, "spawn_prob_base", 0.003))
         self.attr_spawn_bias_w_env = float(_safe_get(f3A, "spawn_bias_env_weight", 0.6))
         self.attr_spawn_energy     = float(_safe_get(f3A, "spawn_energy", 0.05))
-        self.attr_amp_init = float(_safe_get(f3A, "amplitude_init", 0.05))
-        self.attr_amp_min  = float(_safe_get(f3A, "amplitude_min", 0.005))
-        self.attr_amp_max  = float(_safe_get(f3A, "amplitude_max", 0.5))
+        self.attr_amp_init   = float(_safe_get(f3A, "amplitude_init", 0.05))
+        self.attr_amp_min    = float(_safe_get(f3A, "amplitude_min", 0.005))
+        self.attr_amp_max    = float(_safe_get(f3A, "amplitude_max", 0.5))
         self.attr_maint_rate = float(_safe_get(f3A, "maint_cost_rate", 0.001))
-        self.attr_decay    = float(_safe_get(f3A, "decay_rate", 0.01))
-        self.attr_bank_leak = float(_safe_get(f3A, "bank_leak", 0.02))
+        self.attr_decay      = float(_safe_get(f3A, "decay_rate", 0.01))
+        self.attr_bank_leak  = float(_safe_get(f3A, "bank_leak", 0.02))
         shapeA = f3A.get("shape", {})
-        self.r_par_rng  = tuple(_safe_get(shapeA, "r_parallel_range", (2.0, 6.0)))
-        self.r_perp_rng = tuple(_safe_get(shapeA, "r_perp_range", (1.0, 3.0)))
-        self.theta_jitter = float(_safe_get(shapeA, "theta_jitter", 0.3))
+        self.r_par_rng     = tuple(_safe_get(shapeA, "r_parallel_range", (2.0, 6.0)))
+        self.r_perp_rng    = tuple(_safe_get(shapeA, "r_perp_range", (1.0, 3.0)))
+        self.theta_jitter  = float(_safe_get(shapeA, "theta_jitter", 0.3))
         infl = f3A.get("influence", {})
         self.c_theta_rho  = float(_safe_get(infl, "c_theta_rho", 0.5))
         self.c_theta_H    = float(_safe_get(infl, "c_theta_H",   0.5))
         self.c_alpha      = float(_safe_get(infl, "c_alpha",     0.25))
         self.c_beta       = float(_safe_get(infl, "c_beta",      0.25))
         self.birth_mul_kappa = float(_safe_get(infl, "birth_multiplier_kappa", 0.5))
-        self.attr_max = int(_safe_get(f3A, "max_count", 256))
-        self.attr_spawn_trials = int(_safe_get(f3A, "spawn_trials", 32))
-
-        # NEW: encoding knobs (entropy-drop guided attractors)
+        self.attr_max         = int(_safe_get(f3A, "max_count", 256))
+        self.attr_spawn_trials= int(_safe_get(f3A, "spawn_trials", 32))
+    
+        # encoding-aware attractor guidance knobs
         enc = f3A.get("encoding", {})
-        self.enc_beta              = float(_safe_get(enc, "beta", 0.10))
-        self.enc_env_weight        = float(_safe_get(enc, "env_weight", 0.40))
-        self.enc_spawn_env_coeff   = float(_safe_get(enc, "spawn_env_coeff", 0.80))
-        self.enc_spawn_enc_coeff   = float(_safe_get(enc, "spawn_enc_coeff", 1.60))
-        self.enc_radius_par_mult   = float(_safe_get(enc, "radius_par_mult", 0.80))
-        self.enc_radius_perp_mult  = float(_safe_get(enc, "radius_perp_mult", 0.40))
-        self.enc_amp_mult          = float(_safe_get(enc, "amp_mult", 0.50))
-        self.enc_jitter_reduction  = float(_safe_get(enc, "jitter_reduction", 0.70))
-        self.enc_signal_noise_base = float(_safe_get(enc, "signal_noise_base", 0.50))
-        self.enc_signal_noise_red  = float(_safe_get(enc, "signal_noise_reduction", 0.70))
-        self.enc_influence_gain    = float(_safe_get(enc, "influence_enc_gain", 2.0))
-        self.enc_param_damp_gain   = float(_safe_get(enc, "param_damp_gain", 1.5))
-        
-        # --- NEW encoding-aware state (for attractor guidance) ---
-        self.enc_entropy_ema = np.zeros(shape, dtype=float)   # smooth entropy-drop signal
-        self.enc_decay = 0.95                                 # smoothing rate (tune)
-        self.enc_gain  = 0.05                                 # how fast it updates
-        self._enc_ready = False
-        
-        # keep full f3 config for noise knobs (NEW)
+        self.enc_beta            = float(_safe_get(enc, "beta", 0.10))       # smoothing of enc_map
+        self.enc_env_weight      = float(_safe_get(enc, "env_weight", 0.40))
+        self.enc_spawn_env_coeff = float(_safe_get(enc, "spawn_env_coeff", 0.80))
+        self.enc_spawn_enc_coeff = float(_safe_get(enc, "spawn_enc_coeff", 1.60))
+        self.enc_radius_par_mult  = float(_safe_get(enc, "radius_par_mult", 0.80))
+        self.enc_radius_perp_mult = float(_safe_get(enc, "radius_perp_mult", 0.40))
+        self.enc_amp_mult         = float(_safe_get(enc, "amp_mult", 0.50))
+        self.enc_jitter_reduction = float(_safe_get(enc, "jitter_reduction", 0.70))
+        self.enc_signal_noise_base= float(_safe_get(enc, "signal_noise_base", 0.50))
+        self.enc_signal_noise_red = float(_safe_get(enc, "signal_noise_reduction", 0.70))
+        self.enc_influence_gain   = float(_safe_get(enc, "influence_enc_gain", 2.0))
+        self.enc_param_damp_gain  = float(_safe_get(enc, "param_damp_gain", 1.5))
+    
+        # keep the full f3 config for noise knobs used in _noise_from_encoding
         self.f3_cfg = cfg_f3 or {}
-        
-        # --- encoding (entropy-drop) tracking (uses your EMA style) ---
-        self.enc_entropy_ema = np.zeros(shape, dtype=float)
-        self._enc_ready = False
-        # defaults; can be overridden by f3.attractors.noise
-        noise_cfg = ((cfg_f3 or {}).get("attractors", {}).get("noise", {}) 
-                     if isinstance(cfg_f3, dict) else {})
-        self.enc_decay = float(noise_cfg.get("ema_decay", 0.95))
-        self.enc_gain  = float(noise_cfg.get("ema_gain",  1.0 - self.enc_decay))
-        
-# expose a normalized map the rest of the code will read
-self.enc_strength = np.zeros(shape, dtype=float)   # in [0,1]
-
-        # fields
+    
+        # ---------- fields & encoding EMAs ----------
         if self.ndim == 1:
             X = shape[0]
             E = max(1, X - 1)
             self.F = np.full((X,), 0.5, float)
             self.B = np.zeros((X,), float)
             self.T = np.full((X,), self.T0, float)
+    
             self.A     = self.rng.uniform(*self.A_range, size=E)
             self.freq  = self.rng.uniform(*self.f_range, size=E)
             self.phi   = self.rng.uniform(*self.phi_range, size=E)
             self.kappa = self.rng.uniform(*self.kappa_range, size=E)
-
+    
             # encoding EMAs (1D)
             self._ent_fast = np.zeros((X,), dtype=float)
             self._ent_slow = np.zeros((X,), dtype=float)
             self.enc_map   = np.zeros((X,), dtype=float)
+            self.enc_strength = self.enc_map  # alias
         else:
             H, W = shape
             self.F = np.full((H, W), 0.5, float)
             self.B = np.zeros((H, W), float)
             self.T = np.full((H, W), self.T0, float)
+    
             self.A     = self.rng.uniform(*self.A_range, size=(H, W))
             self.freq  = self.rng.uniform(*self.f_range, size=(H, W))
             self.phi   = self.rng.uniform(*self.phi_range, size=(H, W))
             self.kappa = self.rng.uniform(*self.kappa_range, size=(H, W))
-
+    
             # encoding EMAs (2D)
             self._ent_fast = np.zeros((H, W), dtype=float)
             self._ent_slow = np.zeros((H, W), dtype=float)
             self.enc_map   = np.zeros((H, W), dtype=float)
-
-        # attractors
+            self.enc_strength = self.enc_map  # alias
+    
+        # ---------- attractor store ----------
         self.attractors: List[Attractor] = []
         self._next_attr_id = 1
-
-        # cache for metrics
-        self._last_spent = 0.0
+    
+        # ---------- metrics cache ----------
+        self._last_spent  = 0.0
         self._last_dissip = 0.0
 
     # ----- energy & temperature -----
@@ -339,21 +327,26 @@ self.enc_strength = np.zeros(shape, dtype=float)   # in [0,1]
         Gmag = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
         return _box_var2d(Gmag)
 
-    def _update_encoding_maps(self, S: np.ndarray):
+        def _update_encoding_maps(self, S: np.ndarray):
         """EMA of entropy; encoding := positive (slow - fast), normalized to [0,1]."""
         ent = self._entropy_field(S)
         self._ent_fast = (1.0 - self._alpha_fast) * self._ent_fast + self._alpha_fast * ent
         self._ent_slow = (1.0 - self._alpha_slow) * self._ent_slow + self._alpha_slow * ent
         drop = np.maximum(self._ent_slow - self._ent_fast, 0.0)  # where entropy is dropping
+    
         # robust normalize
         q05 = float(np.quantile(drop, 0.05)) if drop.size else 0.0
         q95 = float(np.quantile(drop, 0.95)) if drop.size else 1.0
         scale = max(1e-12, q95 - q05)
         enc = np.clip((drop - q05) / scale, 0.0, 1.0)
+    
         # light smoothing to avoid flicker
         beta = float(np.clip(self.enc_beta, 0.0, 1.0))
         self.enc_map = (1.0 - beta) * getattr(self, "enc_map", enc) + beta * enc
     
+        # NEW: alias so legacy readers still work
+        self.enc_strength = self.enc_map
+        
     # ----------------------------------------
     # MOD: use encoding when spawning
     # ----------------------------------------
@@ -561,11 +554,11 @@ self.enc_strength = np.zeros(shape, dtype=float)   # in [0,1]
             k.amp = float(np.clip(k.amp + 0.1 * (eff - k.reward_avg) * k.amp, 0.0, self.attr_amp_max))
 
     def _encoding_at(self, y: int, x: int) -> float:
-        if not self._enc_ready or self.ndim != 2:
+        if self.ndim != 2:
             return 0.0
         H, W = self.shape
         if 0 <= y < H and 0 <= x < W:
-            v = float(self.enc_strength[y, x])
+            v = float(self.enc_map[y, x])   # or self.enc_strength
             return float(np.clip(v, 0.0, 1.0))
         return 0.0
 
@@ -608,9 +601,13 @@ self.enc_strength = np.zeros(shape, dtype=float)   # in [0,1]
                     r_perp = float(np.clip(k.r_perp + self.rng.normal(0, 0.2), *self.r_perp_rng))
                     theta  = float((k.theta + self.rng.normal(0, self.theta_jitter) + np.pi) % (2*np.pi) - np.pi)
                     amp    = float(self.attr_amp_init)
+    
+                    # NEW: children adopt local encoding-driven noise
+                    sig_theta, sig_signal = self._noise_from_encoding(ny, nx)
+    
                     kk = Attractor(self._next_attr_id, (ny, nx), r_par, r_perp, theta,
                                    amp, self.attr_maint_rate, self.attr_decay,
-                                   sigma_theta=0.5, sigma_signal=0.5)
+                                   sigma_theta=float(sig_theta), sigma_signal=float(sig_signal))
                     self._next_attr_id += 1
                     self.attractors.append(kk)
                     if len(self.attractors) >= self.attr_max:
@@ -667,15 +664,6 @@ def step_physics(
     # build/update encoding maps before attractor lifecycle (uses S)
     if st.ndim == 2:
         st._update_encoding_maps(S)
-
-    # ---------------- Encoding-aware bookkeeping (optional) ----------------
-    # If you've added the new helpers, we keep them up to date here.
-    if st.ndim == 2 and hasattr(st, "_update_encoding_maps"):
-        try:
-            st._update_encoding_maps(S)
-        except Exception:
-            # never let metrics/bookkeeping crash the sim
-            pass
 
     # ---------------- Attractors lifecycle ----------------
     if st.ndim == 2:
