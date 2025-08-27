@@ -376,13 +376,23 @@ def draw_3d_connections_over_time(
     *,
     camera: dict | None = None,
     uirevision: str = "conn3d",
-    attr_history: list | None = None,   # <— NEW: per-frame attractor snapshots
+    attr_history: list | None = None,   # per-frame attractor snapshots
 ):
     """
     Draw Env dots + time-layered substrate connections in 3D.
     If `attr_history` is provided as a list of {"t": int, "items":[{id, pos(y,x), amp}]},
     we plot (a) per-frame attractor points and (b) trajectories (by id) across time.
+
+    Returns (non-breaking extra):
+        dict with the exact polylines sent to Plotly for the connections layer:
+        {
+          "conn_x": List[float|None],
+          "conn_y": List[float|None],
+          "conn_z": List[float|None],
+        }
+        (Lists use None separators between individual segments/polylines.)
     """
+    import plotly.graph_objects as go
 
     fig = go.Figure()
 
@@ -402,6 +412,8 @@ def draw_3d_connections_over_time(
         )
         if xs.size == 0:
             continue
+
+        # budget guard (keep full "triplets" = [x0,x1,None])
         if (len(xs_all) + len(xs)) > budget:
             keep = max(0, budget - len(xs_all))
             if keep <= 0:
@@ -409,19 +421,28 @@ def draw_3d_connections_over_time(
             triplets = len(xs) // 3
             if triplets > 0:
                 idx = np.random.choice(triplets, size=max(1, keep // 3), replace=False)
-                xs_t = []; ys_t = []; zs_t = []
+                xs_t, ys_t, zs_t = [], [], []
                 for k in idx:
                     i = 3 * k
                     xs_t += [xs[i], xs[i+1], None]
                     ys_t += [ys[i], ys[i+1], None]
                     zs_t += [zs[i], zs[i+1], None]
-                xs, ys, zs = np.array(xs_t), np.array(ys_t), np.array(zs_t)
+                xs, ys, zs = np.array(xs_t, dtype=object), np.array(ys_t, dtype=object), np.array(zs_t, dtype=object)
+
         xs_all.append(xs); ys_all.append(ys); zs_all.append(zs)
 
+    conn_x, conn_y, conn_z = [], [], []
     if xs_all:
         xs_all = np.concatenate(xs_all)
         ys_all = np.concatenate(ys_all)
         zs_all = np.concatenate(zs_all)
+
+        # Capture the exact polylines we’re about to plot (None-separated).
+        # Using .tolist() preserves None separators (dtype=object arrays).
+        conn_x = xs_all.tolist()
+        conn_y = ys_all.tolist()
+        conn_z = zs_all.tolist()
+
         fig.add_trace(go.Scatter3d(
             x=xs_all, y=ys_all, z=zs_all,
             mode="lines",
@@ -491,7 +512,7 @@ def draw_3d_connections_over_time(
                     Zs += [z0,      z0,      None]
                 if Xs:
                     fig.add_trace(go.Scatter3d(
-                        x=np.array(Xs), y=np.array(Ys), z=np.array(Zs),
+                        x=np.array(Xs, dtype=object), y=np.array(Ys, dtype=object), z=np.array(Zs, dtype=object),
                         mode="lines",
                         line=dict(width=4),
                         opacity=float(attr_alpha),
@@ -528,3 +549,6 @@ def draw_3d_connections_over_time(
             ],
         ),
     )
+
+    # Non-breaking extra info for optional debug/analysis
+    return {"conn_x": conn_x, "conn_y": conn_y, "conn_z": conn_z}
