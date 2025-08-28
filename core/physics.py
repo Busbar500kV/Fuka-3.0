@@ -464,46 +464,6 @@ class LocalState:
         return (_clip(g_A,-gc,gc), _clip(g_f,-gc,gc), _clip(g_phi,-gc,gc),
                 _clip(g_kappa,-gc,gc), mism_x, mism_y)
 
-    # =======================
-    # Attractor influence
-    # =======================
-
-    def _boost_grads_with_attractors_2d(self, gA, gf, gphi, gk, S: np.ndarray, E: np.ndarray):
-        if not self.attractors:
-            return gA, gf, gphi, gk
-
-        H, W = S.shape
-        # env gradient orientation (unit vectors)
-        Ex = _grad2d_x(E); Ey = _grad2d_y(E)
-        magE = np.hypot(Ex, Ey) + 1e-12
-        ux, uy = Ex / magE, Ey / magE  # orientation field
-
-        # encoding gain + parameter damping fields
-        Emap = self.enc_map if hasattr(self, "enc_map") else np.zeros_like(S)
-        enc_gain = 1.0 + self.enc_influence_gain * Emap
-        damp = 1.0 / (1.0 + self.enc_param_damp_gain * Emap)  # reduce param noise where encoding is strong
-
-        # apply global damping to param grads first (elementwise)
-        gA   = gA   * damp
-        gf   = gf   * damp
-        gphi = gphi * damp
-
-        for k in self.attractors:
-            w = k.field(H, W)  # normalized footprint * amplitude
-            dx = np.cos(k.theta); dy = np.sin(k.theta)
-
-            # alignment of local env gradient with attractor orientation
-            align = np.clip(ux * dx + uy * dy, -1.0, 1.0)
-
-            # steer κ more strongly in high-encoding regions
-            gk -= self.c_theta_H * w * align * enc_gain
-
-            # light param bias to help “encode” repeated structure
-            gA   -= self.c_alpha * w * (self.A   - np.mean(self.A))
-            gf   -= self.c_alpha * w * (self.freq - np.mean(self.freq))
-            gphi -= self.c_beta  * w * (self.phi  - np.mean(self.phi))
-
-        return gA, gf, gphi, gk
     
     # =======================
     # Energy gate & apply steps
@@ -955,8 +915,6 @@ def step_physics(
     # ---- 2D branch (Option-B aware) ----
     gA, gf, gphi, gk, mism_x, mism_y = st._propose_grads_2d(t_idx, S, E)
 
-    # If you dropped in the new encoding-aware booster, this call will use it transparently.
-    gA, gf, gphi, gk = st._boost_grads_with_attractors_2d(gA, gf, gphi, gk, S, E)
 
     dA   = - st.eta * gA
     df   = - st.eta * gf
