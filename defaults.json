@@ -159,6 +159,13 @@
         "influence_enc_gain": 2.0,
         "param_damp_gain": 1.5
       },
+      "noise": {
+        "sigma_signal_max": 0.60,
+        "sigma_signal_min": 0.08,
+        "sigma_theta_max": 0.60,
+        "sigma_theta_min": 0.08,
+        "encoding_gain": 1.0
+      },
       "max_count": 256
     },
 
@@ -176,7 +183,8 @@
       "noise_gain": 0.40,
       "edge_kind": "both",
       "edge_thr": 0.80,
-      "radius_boost": 1.25
+      "radius_boost": 1.25,
+      "energy_per_unit": 0.0
     }
   }
 }
