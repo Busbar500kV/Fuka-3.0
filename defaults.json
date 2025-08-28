@@ -48,9 +48,9 @@
     "thr_env": 0.10,
     "base_window": 32,
     "eval_window": 32,
-    "corr_threshold": 0.55,
-    "dvar_threshold": 0.00003,
-    "energy_quantile": 0.40,
+    "corr_threshold": 0.45,
+    "dvar_threshold": 0.00002,
+    "energy_quantile": 0.30,
     "stride_t": 1,
     "max_edges": 40000,
     "render": {
@@ -75,7 +75,7 @@
     },
 
     "energy": {
-      "source_rate": 0.22,
+      "source_rate": 0.15,
       "transport_conductance": 0.15,
       "work_to_dissipation_fraction": 1.0,
       "step_cost_coeff": 0.004,
@@ -108,14 +108,14 @@
     },
 
     "attractors": {
-      "spawn_trials": 32,
-      "spawn_energy": 0.05,
-      "amplitude_init": 0.12,
-      "amplitude_min": 0.004,
-      "amplitude_max": 0.8,
-      "maint_cost_rate": 0.0005,
-      "bank_leak": 0.005,
-      "decay_rate": 0.006,
+      "spawn_trials": 6,
+      "spawn_energy": 0.12,
+      "amplitude_init": 0.08,
+      "amplitude_min": 0.006,
+      "amplitude_max": 0.6,
+      "maint_cost_rate": 0.001,
+      "bank_leak": 0.02,
+      "decay_rate": 0.01,
       "shape": {
         "r_parallel_range": [2.0, 6.0],
         "r_perp_range": [1.0, 3.0],
@@ -134,7 +134,7 @@
         "sigma_theta_min": 0.08,
         "encoding_gain": 1.0
       },
-      "max_count": 256
+      "max_count": 64
     },
 
     "stimulation": {
@@ -145,7 +145,7 @@
       "freq_jitter": 0.08,
       "noise_gain": 0.40,
       "edge_kind": "both",
-      "edge_thr": 0.60,
+      "edge_thr": 0.92,
       "radius_boost": 1.25,
       "energy_per_unit": 0.0
     }
