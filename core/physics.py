@@ -293,6 +293,72 @@ class LocalState:
         self._last_spent  = 0.0
         self._last_dissip = 0.0
 
+    def _conn_strength_maps(self, S: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Returns (enc_n, kabs_n, strength) all in [0,1], same shape as S/kappa.
+        strength := sqrt( enc_n * kabs_n ).  Uses self.enc_map, self.kappa, and optionally S gradients.
+        """
+        if self.ndim != 2:
+            Z = np.zeros_like(self.kappa)
+            return Z, Z, Z
+    
+        # enc map (already 0..1-ish but robust-normalize)
+        enc = getattr(self, "enc_map", None)
+        if enc is None:
+            enc = np.zeros_like(self.kappa)
+    
+        def _safe_norm(A: np.ndarray) -> np.ndarray:
+            lo = float(np.min(A)); hi = float(np.max(A))
+            if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
+                return np.zeros_like(A)
+            return (A - lo) / (hi - lo + 1e-12)
+    
+        enc_n  = np.clip(_safe_norm(enc), 0.0, 1.0)
+        kabs_n = np.clip(_safe_norm(np.abs(self.kappa)), 0.0, 1.0)
+    
+        # primary strength: encoding × |kappa|
+        strength = np.sqrt(enc_n * kabs_n)
+    
+        # (Optional) modest boost from current gradients if S provided
+        if S is not None and S.size == self.kappa.size:
+            G = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
+            g_n = _safe_norm(G)
+            # blend in a bit of gradient evidence without overpowering κ
+            strength = np.clip(0.85 * strength + 0.15 * g_n, 0.0, 1.0)
+    
+        return enc_n, kabs_n, strength
+        
+    def _snap_to_connection(self, y: int, x: int, r_search: int, S_hint: Optional[np.ndarray] = None) -> Tuple[int, int]:
+        """
+        Snap (y,x) to the local argmax of 'connection strength' within a (2r+1)^2 window.
+        Uses encoding×|kappa| (and a small |∇S| boost if S_hint provided / available via _last_S).
+        If nothing strong nearby, returns the original (y,x).
+        """
+        if self.ndim != 2 or r_search <= 0:
+            return y, x
+    
+        H, W = self.shape
+        S_use = S_hint if (S_hint is not None) else getattr(self, "_last_S", None)
+    
+        enc_n, kabs_n, strength = self._conn_strength_maps(S_use)
+    
+        y0 = max(0, y - r_search); y1 = min(H, y + r_search + 1)
+        x0 = max(0, x - r_search); x1 = min(W, x + r_search + 1)
+        patch = strength[y0:y1, x0:x1]
+        if patch.size == 0:
+            return y, x
+    
+        # Require the local max to be above a global quantile, so we don't snap into noise.
+        thr_q = float(np.clip(getattr(self, "stim_edge_thr", 0.85), 0.0, 1.0))
+        global_thr = float(np.quantile(strength, thr_q)) if strength.size else 1.0
+    
+        iy, ix = np.unravel_index(int(np.argmax(patch)), patch.shape)
+        y_new, x_new = y0 + int(iy), x0 + int(ix)
+    
+        if float(strength[y_new, x_new]) >= global_thr:
+            return y_new, x_new
+        return y, x
+    
     # ----- energy & temperature -----
     def _inject_sources(self, env_like: np.ndarray):
         # inject into top‑energy percent (simple local uptake)
@@ -358,31 +424,42 @@ class LocalState:
             p_base  = self.attr_spawn_prob_base * (1.0 + self.attr_spawn_bias_w_env * env_loc)
             p_spawn = p_base * (1.0 + self.enc_spawn_env_coeff * env_loc + self.enc_spawn_enc_coeff * enc_loc)
     
-            if (self.rng.random() < p_spawn) and (self.F[y, x] >= self.attr_spawn_energy):
-                # draw base geometry
-                r_par  = float(self.rng.uniform(*self.r_par_rng))
-                r_perp = float(self.rng.uniform(*self.r_perp_rng))
-                theta  = float(self.rng.uniform(-np.pi, np.pi))
+            if self.rng.random() >= p_spawn:
+                continue
     
-                # encoding-driven newborn params
-                r_par  *= (1.0 + self.enc_radius_par_mult  * enc_loc)
-                r_perp *= (1.0 + self.enc_radius_perp_mult * enc_loc)
-                amp     = float(self.attr_amp_init * (1.0 + self.enc_amp_mult * enc_loc))
+            # draw base geometry
+            r_par  = float(self.rng.uniform(*self.r_par_rng))
+            r_perp = float(self.rng.uniform(*self.r_perp_rng))
+            theta  = float(self.rng.uniform(-np.pi, np.pi))
     
-                # lower noise where encoding is strong
-                sig_theta, sig_signal = self._noise_from_encoding(y, x)
+            # --- NEW: snap birth position onto a nearby connection ridge ---
+            r_search = max(2, int(round(r_par)))
+            y_sn, x_sn = self._snap_to_connection(y, x, r_search)
     
-                # pay energy & spawn
-                self.F[y, x] -= self.attr_spawn_energy
-                self.B[y, x] += self.work_to_dissipation_fraction * self.attr_spawn_energy
-                k = Attractor(self._next_attr_id, (y, x), r_par, r_perp, theta,
-                              amp, self.attr_maint_rate, self.attr_decay,
-                              sigma_theta=float(sig_theta), sigma_signal=float(sig_signal))
-                self._next_attr_id += 1
-                self.attractors.append(k)
+            # encoding-driven newborn params (unchanged)
+            enc_loc_sn = float(self._encoding_at(y_sn, x_sn))
+            r_par  *= (1.0 + self.enc_radius_par_mult  * enc_loc_sn)
+            r_perp *= (1.0 + self.enc_radius_perp_mult * enc_loc_sn)
+            amp     = float(self.attr_amp_init * (1.0 + self.enc_amp_mult * enc_loc_sn))
     
-                if len(self.attractors) >= self.attr_max:
-                    break
+            # noise tuned by *connection strength* (encoding×|kappa|), not encoding alone
+            sig_theta, sig_signal = self._noise_from_encoding(y_sn, x_sn)
+    
+            # energy check/pay at the actual snapped location
+            if self.F[y_sn, x_sn] < self.attr_spawn_energy:
+                continue  # not enough free energy here
+    
+            # pay energy & spawn
+            self.F[y_sn, x_sn] -= self.attr_spawn_energy
+            self.B[y_sn, x_sn] += self.work_to_dissipation_fraction * self.attr_spawn_energy
+            k = Attractor(self._next_attr_id, (y_sn, x_sn), r_par, r_perp, theta,
+                          amp, self.attr_maint_rate, self.attr_decay,
+                          sigma_theta=float(sig_theta), sigma_signal=float(sig_signal))
+            self._next_attr_id += 1
+            self.attractors.append(k)
+    
+            if len(self.attractors) >= self.attr_max:
+                break
     
     def _entropy_field(self, S: np.ndarray) -> np.ndarray:
         if self.ndim == 1:
@@ -586,11 +663,22 @@ class LocalState:
 
     def _noise_from_encoding(self, y: int, x: int) -> Tuple[float, float]:
         """
-        Map local encoding -> (sigma_theta, sigma_signal).
-        Higher encoding => lower noise.
+        Map local *connection strength* (encoding × |kappa|, with mild |∇S| boost)
+        -> (sigma_theta, sigma_signal). Higher strength => lower noise.
         Reads knobs from f3.attractors.noise (with safe defaults).
         """
-        enc = self._encoding_at(y, x)
+        if self.ndim != 2:
+            return 0.30, 0.30  # harmless defaults
+    
+        # build strength using last S (best available temporal reference)
+        S_hint = getattr(self, "_last_S", None)
+        _, _, strength = self._conn_strength_maps(S_hint)
+        H, W = self.shape
+        if 0 <= y < H and 0 <= x < W:
+            s = float(np.clip(strength[y, x], 0.0, 1.0))
+        else:
+            s = 0.0
+    
         noise_cfg = ((self.f3_cfg or {}).get("attractors", {}).get("noise", {})
                      if isinstance(self.f3_cfg, dict) else {})
     
@@ -600,12 +688,11 @@ class LocalState:
         sig_th_min  = float(noise_cfg.get("sigma_theta_min",  0.08))
         k_enc       = float(noise_cfg.get("encoding_gain",    1.0))
     
-        enc_eff = float(np.clip(enc ** k_enc, 0.0, 1.0))
-        sigma_signal = (1.0 - enc_eff) * sig_sig_max + enc_eff * sig_sig_min
-        sigma_theta  = (1.0 - enc_eff) * sig_th_max  + enc_eff * sig_th_min
+        eff = float(np.clip(s ** k_enc, 0.0, 1.0))
+        sigma_signal = (1.0 - eff) * sig_sig_max + eff * sig_sig_min
+        sigma_theta  = (1.0 - eff) * sig_th_max  + eff * sig_th_min
         return float(sigma_theta), float(sigma_signal)
         
-    
     def _edge_mask(self, S: np.ndarray) -> np.ndarray:
         """
         Sparse 0/1 mask of likely 'connection edges' to gate where the
