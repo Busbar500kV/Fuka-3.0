@@ -978,10 +978,9 @@ def step_physics(
         if stim is not None:
             new_S = new_S + float(getattr(st, "stim_gain", 0.25)) * stim
 
-    # Selection / propagation
+    # Selection
     try:
         st._reward_and_select(reward_map, energy_paid_map)
-        st._propagate_if_strong()
     except Exception:
         # keep dynamics even if selection logic hiccups
         pass
