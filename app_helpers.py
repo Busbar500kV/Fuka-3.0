@@ -490,7 +490,7 @@ def draw_3d_connections_over_time(
                         size=Sz,
                         opacity=max(0.15, float(attr_alpha)*0.75),
                         color=Enc, colorscale="Viridis", cmin=0.0, cmax=1.0,
-                        colorbar=dict(title="encoding", x=1.05),
+                        colorbar=dict(title="encoding", x=1.16, y=0.5, len=0.70, thickness=12)
                     ),
                     hovertemplate=(
                         "t=%{z}<br>x=%{x}, y=%{y}"
