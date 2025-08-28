@@ -844,43 +844,41 @@ def step_physics(
         if "T" in cfg_phys:
             st.T_base = float(cfg_phys["T"])
 
-    # Deterministic time index (kept for reproducibility)
     global _GLOBAL_TICK
     t_idx = _GLOBAL_TICK
     _GLOBAL_TICK += 1
 
-    # normalize for motor term
     Sn = S / (1e-12 + float(np.max(np.abs(S)))) if np.any(S) else np.zeros_like(S)
 
-    # ---------------- Energy: inject & transport ----------------
+    # Energy: inject & transport
     st._inject_sources(E)
     if st.ndim == 1:
         st._transport_F_1d(st.F)
     else:
         st._transport_F_2d(st.F)
 
-    # ---------------- Temperature update ----------------
+    # Temperature + encoding maps
     signal_var = _rolling_var_1d(S, win=max(3, st.entropy_window)) if st.ndim == 1 else _box_var2d(S)
     st._update_temperature(signal_var)
-    # build/update encoding maps before attractor lifecycle (uses S)
     if st.ndim == 2:
         st._update_encoding_maps(S)
 
-    # ---------------- Attractors lifecycle ----------------
+    # Attractors lifecycle (deterministic spawns + maintenance)
     if st.ndim == 2:
-        # update encoding first (uses current S)
-        st._update_encoding_maps(S)
-        # deterministic spawn/update from connections (uses current S)
-        st._spawn_or_update_from_connections(S)
-        # maintain/decay (energy-gated)
-        st._maintain_and_decay()
+        try:
+            st._spawn_dishbrain(S, E)      # <— NEW deterministic spawner
+        except Exception:
+            pass
+        try:
+            st._maintain_and_decay()
+        except Exception:
+            pass
 
-    # ================== Denoising / learning (with attractor bias) ==================
+    # Denoising / learning (no attractor gradient booster)
     new_S = S.copy()
     T_eff = float(np.mean(st.T))
 
     if st.ndim == 1:
-        # ---- legacy 1D path (unchanged) ----
         cur = S.copy()
         if diffuse != 0.0:
             lap = np.zeros_like(cur)
@@ -909,12 +907,10 @@ def step_physics(
         flux_metric = float(np.mean(np.abs(pull)))
         if not np.all(np.isfinite(cur)):
             cur = np.nan_to_num(cur, nan=0.0, posinf=0.0, neginf=0.0)
-
         return cur, flux_metric
 
-    # ---- 2D branch (Option-B aware) ----
+    # 2D learning grads (no booster)
     gA, gf, gphi, gk, mism_x, mism_y = st._propose_grads_2d(t_idx, S, E)
-
 
     dA   = - st.eta * gA
     df   = - st.eta * gf
@@ -924,26 +920,21 @@ def step_physics(
     dS_pos_sum = float(np.sum(np.maximum(0.0, np.abs(mism_x))) + np.sum(np.maximum(0.0, np.abs(mism_y))))
     energy_paid_map, reward_map = st._apply_energy_gated(T_eff, dS_pos_sum, dA, df, dphi, dk, S)
 
-    # κ-weighted smoothing (divergence form)
+    # κ-weighted smoothing
     kappa = np.clip(st.kappa, st.kappa_range[0], st.kappa_range[1]) * st.kappa_scale
     Sx = _grad2d_x(S); Sy = _grad2d_y(S)
     px = kappa * Sx;   py = kappa * Sy
     new_S = S + _div2d(px, py)
-    
-    # --- DishBrain-style top-down stimulation (optional) ---
+
+    # Top-down stimulus: the only attractor influence
     if getattr(st, "stim_enable", False):
         stim = st._stimulus_topdown(t_idx, new_S)
         if stim is not None:
             new_S = new_S + float(getattr(st, "stim_gain", 0.25)) * stim
 
-    # Selection
-    try:
-        st._reward_and_select(reward_map, energy_paid_map)
-    except Exception:
-        # keep dynamics even if selection logic hiccups
-        pass
+    # (No selection/propagation stage; keep it simple and clean)
 
-    # ---------------- Legacy substrate dynamics layered on top (visual parity) ----------------
+    # Legacy substrate dynamics for parity
     cur = new_S
     if diffuse != 0.0:
         lap = np.zeros_like(cur)
@@ -978,10 +969,8 @@ def step_physics(
     if not np.all(np.isfinite(cur)):
         cur = np.nan_to_num(cur, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # save snapshots for metrics
     st._last_S = cur
     st._last_E = E
-
     return cur, flux_metric
 
 # ============================================================
