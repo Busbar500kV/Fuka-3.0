@@ -712,106 +712,129 @@ class LocalState:
             taken[y0:y1, x0:x1] = True
         return peaks
 
-    def _spawn_or_update_from_connections(self, S: np.ndarray):
+    def _spawn_dishbrain(self, S: np.ndarray, E: np.ndarray):
         """
-        Deterministically place/adjust attractors from current *connection strength*.
-        No randomness, no probabilities.
-    
-        Steps:
-          1) Build strength map (encoding × |kappa| with mild |∇S| boost).
-          2) Pick top-K local maxima with NMS.
-          3) For each peak:
-             - If a live attractor is close, *move/retune* it to the peak.
-             - Else, *spawn* a new one (if energy available).
-          4) Cull by normal maintain/decay (handled elsewhere).
+        Deterministic spawn: place attractors on strong connection ridges.
+        - Strength = sqrt( enc * |kappa| ) with mild |∇S| boost.
+        - Pick top-K non-overlapping peaks (quantile-thresholded).
+        - Theta aligns with local ∇S orientation (no random θ).
+        - Radii/amp scale with local encoding; noise from connection strength.
+        - Energy-gated; no random propagation.
         """
-        if self.ndim != 2: 
+        if self.ndim != 2:
             return
+        if len(self.attractors) >= self.attr_max:
+            return
+        if S.size == 0:
+            return
+    
         H, W = self.shape
     
-        # 1) strength map in [0,1]
-        _, _, strength = self._conn_strength_maps(S)
+        # ---- strength map: sqrt(enc × |kappa|) with mild grad boost ----
+        enc = getattr(self, "enc_map", None)
+        if enc is None or enc.shape != S.shape:
+            enc = np.zeros_like(S)
     
-        # 2) top-K peaks (K = capacity left, with a small cap per tick)
-        cap = int(max(0, self.attr_max - len(self.attractors)))
-        if cap <= 0:
+        def _safe_norm(A: np.ndarray) -> np.ndarray:
+            lo = float(np.min(A)); hi = float(np.max(A))
+            if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
+                return np.zeros_like(A)
+            return (A - lo) / (hi - lo + 1e-12)
+    
+        enc_n  = _safe_norm(enc)
+        kabs_n = _safe_norm(np.abs(self.kappa))
+    
+        # mild gradient evidence
+        G = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
+        g_n = _safe_norm(G)
+    
+        strength = np.clip(0.85 * np.sqrt(enc_n * kabs_n) + 0.15 * g_n, 0.0, 1.0)
+    
+        # ---- candidate peaks above quantile threshold ----
+        # Use the same "edge" percentile knob to set how selective we are.
+        thr_q = float(np.clip(getattr(self, "stim_edge_thr", 0.85), 0.0, 1.0))
+        thr_v = float(np.quantile(strength, thr_q)) if strength.size else 1.0
+        cand_mask = (strength >= thr_v)
+    
+        if not np.any(cand_mask):
             return
-        per_tick_cap = max(1, min(16, cap))  # don’t flood per step
-        # detection radius ~ typical parallel radius
-        r_par_mean = 0.5 * (float(self.r_par_rng[0]) + float(self.r_par_rng[1]))
-        detect_r = int(max(2, round(r_par_mean)))
-        peaks = _nms_peaks(strength, k=per_tick_cap, radius=detect_r)
-        if not peaks:
+    
+        # ---- non-maximum suppression over small neighborhood ----
+        # We compute local argmax within (2r+1)^2 around each candidate and keep only true peaks.
+        r_nms = 2  # small, tight peaks
+        peaks_yx = []
+        visited = np.zeros_like(cand_mask, dtype=bool)
+        # Sort all candidates by strength high->low, then sweep and keep only non-overlapping
+        ys, xs = np.where(cand_mask)
+        order = np.argsort(-strength[ys, xs])
+        for idx in order:
+            y0, x0 = int(ys[idx]), int(xs[idx])
+            if visited[y0, x0]:
+                continue
+            yL = max(0, y0 - r_nms); yH = min(H, y0 + r_nms + 1)
+            xL = max(0, x0 - r_nms); xH = min(W, x0 + r_nms + 1)
+            patch = strength[yL:yH, xL:xH]
+            iy, ix = np.unravel_index(int(np.argmax(patch)), patch.shape)
+            yp, xp = yL + int(iy), xL + int(ix)
+            # mark neighborhood as visited so we don't keep multiple close peaks
+            visited[yL:yH, xL:xH] = True
+            peaks_yx.append((int(yp), int(xp)))
+    
+        if not peaks_yx:
             return
     
-        # distance thresholds
-        stick_r = max(1.0, 0.75 * r_par_mean)   # when "same" attractor
-        new_amp = float(self.attr_amp_init)
+        # ---- select at most K per tick and enforce min spacing from existing attractors ----
+        max_per_tick = int(max(1, min(self.attr_spawn_trials, self.attr_max - len(self.attractors))))
+        min_dist = 3.0  # pixels; prevents clumping
+        exist = [(int(a.pos[0]), int(a.pos[1])) for a in self.attractors]
     
-        # convenience grads
-        gx = _grad2d_x(S); gy = _grad2d_y(S)
+        def _far_from_existing(y, x) -> bool:
+            for (yy, xx) in exist:
+                if (yy - y)**2 + (xx - x)**2 < (min_dist * min_dist):
+                    return False
+            return True
     
-        for (y, x, s) in peaks:
-            # 3a) find nearest existing attractor
-            best_id = -1
-            best_d2 = 1e18
-            for i, a in enumerate(self.attractors):
-                dy = float(a.pos[0] - y); dx = float(a.pos[1] - x)
-                d2 = dy*dy + dx*dx
-                if d2 < best_d2:
-                    best_d2 = d2; best_id = i
+        spawned = 0
+        Sx = _grad2d_x(S); Sy = _grad2d_y(S)
     
-            if best_id >= 0 and best_d2 <= stick_r * stick_r:
-                # Move/retune existing attractor toward the peak.
-                a = self.attractors[best_id]
-                a.pos = (int(y), int(x))
-                # orientation from local tangent
-                th = np.arctan2(gy[y, x], gx[y, x]) + np.pi * 0.5
-                a.theta = float((th + np.pi) % (2*np.pi) - np.pi)
-                # radii scaled by local encoding
-                enc_loc = float(self._encoding_at(y, x))
-                a.r_par  = float(np.clip(a.r_par  * (1.0 + self.enc_radius_par_mult  * enc_loc),
-                                         self.r_par_rng[0],  self.r_par_rng[1]))
-                a.r_perp = float(np.clip(a.r_perp * (1.0 + self.enc_radius_perp_mult * enc_loc),
-                                         self.r_perp_rng[0], self.r_perp_rng[1]))
-                # amplitude nudged toward connection strength
-                a.amp = float(np.clip(0.8 * a.amp + 0.2 * (new_amp * (1.0 + self.enc_amp_mult * enc_loc) * s),
-                                      0.0, self.attr_amp_max))
-                # retune noise from strength/encoding
-                sig_th, sig_sig = self._noise_from_encoding(y, x)
-                a.sigma_theta  = float(sig_th)
-                a.sigma_signal = float(sig_sig)
-            else:
-                # 3b) spawn new at the peak (energy-gated)
-                if self.F[y, x] < self.attr_spawn_energy:
-                    continue
-                self.F[y, x] -= self.attr_spawn_energy
-                self.B[y, x] += self.work_to_dissipation_fraction * self.attr_spawn_energy
+        for (y, x) in peaks_yx:
+            if spawned >= max_per_tick or len(self.attractors) >= self.attr_max:
+                break
+            if not _far_from_existing(y, x):
+                continue
     
-                # geometry from ranges, then scaled by encoding at (y,x)
-                enc_loc = float(self._encoding_at(y, x))
-                r_par  = float(self.rng.uniform(*self.r_par_rng))
-                r_perp = float(self.rng.uniform(*self.r_perp_rng))
-                r_par  *= (1.0 + self.enc_radius_par_mult  * enc_loc)
-                r_perp *= (1.0 + self.enc_radius_perp_mult * enc_loc)
-                # orientation = local tangent
-                th = _local_tangent_theta(S, y, x)
-                # amplitude scales with connection strength and encoding
-                amp = float(new_amp * (1.0 + self.enc_amp_mult * enc_loc) * s)
-                # local noise
-                sig_th, sig_sig = self._noise_from_encoding(y, x)
+            # energy gate
+            if self.F[y, x] < self.attr_spawn_energy:
+                continue
     
-                k = Attractor(
-                    self._next_attr_id, (int(y), int(x)),
-                    float(r_par), float(r_perp), float(th),
-                    float(np.clip(amp, 0.0, self.attr_amp_max)),
-                    self.attr_maint_rate, self.attr_decay,
-                    sigma_theta=float(sig_th), sigma_signal=float(sig_sig)
-                )
-                self._next_attr_id += 1
-                self.attractors.append(k)
-                if len(self.attractors) >= self.attr_max:
-                    break
+            # orientation from local gradient (avoid divide-by-zero)
+            gx = float(Sx[y, x]) if 0 <= y < H and 0 <= x < W else 0.0
+            gy = float(Sy[y, x]) if 0 <= y < H and 0 <= x < W else 0.0
+            theta = float(np.arctan2(gy, gx)) if (gx*gx + gy*gy) > 1e-12 else 0.0
+    
+            # encoding-driven radii and amplitude (no randomness)
+            enc_loc = float(enc_n[y, x])
+            r_par  = float(np.mean(self.r_par_rng)  * (1.0 + self.enc_radius_par_mult  * enc_loc))
+            r_perp = float(np.mean(self.r_perp_rng) * (1.0 + self.enc_radius_perp_mult * enc_loc))
+            amp    = float(self.attr_amp_init      * (1.0 + self.enc_amp_mult         * enc_loc))
+    
+            # noise tuned by strength
+            sig_theta, sig_signal = self._noise_from_encoding(y, x)
+    
+            # pay energy & spawn
+            self.F[y, x] -= self.attr_spawn_energy
+            self.B[y, x] += self.work_to_dissipation_fraction * self.attr_spawn_energy
+    
+            k = Attractor(
+                self._next_attr_id, (y, x),
+                r_par=r_par, r_perp=r_perp, theta=theta,
+                amp=amp, maint_cost=self.attr_maint_rate, decay=self.attr_decay,
+                sigma_theta=float(sig_theta), sigma_signal=float(sig_signal),
+            )
+            self._next_attr_id += 1
+            self.attractors.append(k)
+            exist.append((y, x))
+            spawned += 1
 
 
 # ============================================================
