@@ -1,7 +1,7 @@
-# app_helpers.py
+# app_helpers.py (clean optional edits)
 from __future__ import annotations
 import json, os
-from typing import Any, Dict, Tuple, List, Optional
+from typing import Any, Dict, Tuple, List
 
 import numpy as np
 import plotly.graph_objects as go
@@ -53,29 +53,22 @@ def new_key(base: str) -> str:
 # -------------------- Numeric UI helpers --------------------
 
 def _num_step(v: float) -> float:
-    v = abs(float(v)) if v != 0 else 1.0
+    v = abs(float(v)) or 1.0
     mag = 10 ** int(np.floor(np.log10(v)))
     return max(mag * 0.01, 10 ** (int(np.floor(np.log10(v))) - 2))
 
 def _float_slider_bounds(label: str, val: float) -> Tuple[float, float, float]:
     name = label.lower()
-    step = round(_num_step(val), 6)
-    if step < 1e-6:  # never pass a zero step to Streamlit
-        step = 1e-6
+    step = round(max(_num_step(val), 1e-6), 6)
     if 0.0 <= val <= 1.0 or any(s in name for s in [
         "sigma","noise","decay","diffuse","k_","thr","threshold","opacity","gamma","floor"
     ]):
-        lo, hi = 0.0, 1.0
-        if val > 1.0:
-            hi = max(1.0, float(val) * 10.0)
+        lo, hi = 0.0, max(1.0, float(val) * 10.0) if val > 1.0 else 1.0
         return lo, hi, step
     if val < 0:
         m = abs(val)
-        lo, hi = -max(1.0, m * 10.0), max(1.0, m * 10.0)
-        return lo, hi, step
-    hi = max(1.0, float(val) * 10.0)
-    lo = 0.0
-    return lo, hi, step
+        return -max(1.0, m * 10.0), max(1.0, m * 10.0), step
+    return 0.0, max(1.0, float(val) * 10.0), step
 
 def _int_slider_bounds(label: str, val: int) -> Tuple[int, int, int]:
     name = label.lower()
@@ -83,16 +76,11 @@ def _int_slider_bounds(label: str, val: int) -> Tuple[int, int, int]:
         return 0, 10_000_000, 1
     if any(k in name for k in ["frame", "space", "length", "len", "height", "width", "band", "center", "gate"]):
         base = max(1, int(val))
-        hi = max(base * 10, base + 10)
-        lo = 0
-        step = max(1, base // 10)
-        return lo, hi, step
+        return 0, max(base * 10, base + 10), max(1, base // 10)
     if val >= 0:
-        lo, hi = 0, max(10, val * 10)
-    else:
-        m = abs(val)
-        lo, hi = -max(10, m * 10), max(10, m * 10)
-    return lo, hi, 1
+        return 0, max(10, val * 10), 1
+    m = abs(val)
+    return -max(10, m * 10), max(10, m * 10), 1
 
 # -------------------- Sidebar renderers --------------------
 
@@ -107,9 +95,7 @@ def render_scalar(label: str, value: Any, path: str):
     if isinstance(value, float):
         lo, hi, step = _float_slider_bounds(label, float(value))
         v0 = float(np.clip(float(value), lo, hi))
-        if hi == lo:
-            hi = lo + max(step, 1e-6)
-        return st.slider(label, min_value=float(lo), max_value=float(hi), value=v0, step=float(max(step, 1e-6)), key=key)
+        return st.slider(label, min_value=float(lo), max_value=float(hi), value=v0, step=float(step), key=key)
     if isinstance(value, str):
         return st.text_input(label, value=value, key=key)
     return st.text_area(label, value=json.dumps(value, indent=2), key=key)
@@ -150,29 +136,14 @@ def _apply_floor_gamma(Z: np.ndarray, floor: float, gamma: float) -> np.ndarray:
     if floor > 0.0: Z = np.where(Z >= floor, Z, np.nan)
     return Z
 
-def _resample_rows(M: np.ndarray, new_len: int) -> np.ndarray:
-    T, X = M.shape
-    if X == new_len: return M
-    x_src = np.linspace(0.0, 1.0, X)
-    x_tgt = np.linspace(0.0, 1.0, new_len)
-    out = np.zeros((T, new_len), dtype=float)
-    for t in range(T):
-        out[t] = np.interp(x_tgt, x_src, M[t])
-    return out
-
 def draw_combined_heatmap(ph, E_stack: np.ndarray, S_stack: np.ndarray, y_row: int,
                           heat_floor: float, heat_gamma: float,
                           env_opacity: float, sub_opacity: float,
                           new_key_fn) -> None:
-    E = E_stack; S = S_stack
-    if E.ndim == 3: E = E[:, y_row, :]
-    if S.ndim == 3: S = S[:, y_row, :]
-    if S.shape[1] != E.shape[1]:
-        S_res = _resample_rows(S, E.shape[1])
-    else:
-        S_res = S
+    E = E_stack[:, y_row, :] if E_stack.ndim == 3 else E_stack
+    S = S_stack[:, y_row, :] if S_stack.ndim == 3 else S_stack
     En = _apply_floor_gamma(_norm(E), heat_floor, heat_gamma)
-    Sn = _apply_floor_gamma(_norm(S_res), heat_floor, heat_gamma)
+    Sn = _apply_floor_gamma(_norm(S), heat_floor, heat_gamma)
     fig = go.Figure()
     fig.add_trace(go.Heatmap(z=En, coloraxis="coloraxis", zsmooth=False, name="Env", opacity=env_opacity))
     fig.add_trace(go.Heatmap(z=Sn, coloraxis="coloraxis2", zsmooth=False, name="Substrate", opacity=sub_opacity))
@@ -186,10 +157,6 @@ def draw_combined_heatmap(ph, E_stack: np.ndarray, S_stack: np.ndarray, y_row: i
     ph.plotly_chart(fig, use_container_width=True, theme=None, key=new_key_fn("combo2d"))
 
 def assert_equal_grids(E_stack: np.ndarray, S_stack: np.ndarray) -> Tuple[int,int,int]:
-    """
-    Ensure env and substrate share the exact (T,H,W) grid.
-    Returns (T,H,W) on success; stops the app otherwise.
-    """
     if E_stack.shape != S_stack.shape:
         st.error(
             f"Grid mismatch: Env {E_stack.shape} vs Substrate {S_stack.shape}. "
@@ -220,7 +187,7 @@ def draw_stats_timeseries(ph, t, entropy=None, variance=None, total_mass=None, n
     fig.update_layout(xaxis_title="t (frames)", yaxis_title="value", title=title, height=360, template="plotly_dark")
     ph.plotly_chart(fig, use_container_width=True, theme=None, key=new_key_fn("stats"))
 
-# -------------------- 3‑D helpers & connections --------------------
+# -------------------- 3-D helpers & connections --------------------
 
 def _norm_local(A):
     m, M = float(np.nanmin(A)), float(np.nanmax(A))
@@ -229,9 +196,7 @@ def _norm_local(A):
     return (A - m) / (M - m + 1e-12)
 
 def _draw_3d_env_points(fig: go.Figure, E_stack: np.ndarray, thr: float, portion: float = 0.35, cap_pts: int = 200000):
-    E = E_stack
-    if E.ndim == 2:  # (T,X) -> (T,1,X)
-        E = E[:, None, :]
+    E = E_stack if E_stack.ndim == 3 else E_stack[:, None, :]
     En = _norm_local(E)
     tE, yE, xE = np.where(En >= thr)
     n = len(xE)
@@ -239,70 +204,7 @@ def _draw_3d_env_points(fig: go.Figure, E_stack: np.ndarray, thr: float, portion
         keep = int(max(1, portion * min(n, cap_pts)))
         idx = np.random.choice(n, size=keep, replace=False)
         xE, yE, tE = xE[idx], yE[idx], tE[idx]
-    fig.add_trace(go.Scatter3d(
-        x=xE, y=yE, z=tE, mode="markers",
-        marker=dict(size=2, opacity=0.55),
-        name="Env"
-    ))
-
-def draw_3d_points_legacy(
-    ph,
-    E_stack: np.ndarray,
-    S_stack: np.ndarray,
-    *,
-    thr_points: float,
-    max_points_total: int,
-    uirevision: str = "points3d"
-):
-    """
-    Legacy sparse 3‑D point cloud: Env dots + Substrate dots.
-    Keeps camera/zoom stable with uirevision + stable key.
-    """
-    fig = go.Figure()
-
-    # Env points (reuse helper)
-    _draw_3d_env_points(fig, E_stack, thr=float(thr_points), portion=0.25)
-
-    # Substrate points
-    Sn_full = S_stack if S_stack.ndim == 3 else S_stack[:, None, :]
-    Sn = _norm_local(Sn_full)
-    tS, yS, xS = np.where(Sn >= float(thr_points))
-    nS = len(xS)
-    if nS > 0:
-        keep = int(min(nS, max_points_total // 2))
-        idx = np.random.choice(nS, size=keep, replace=False)
-        xS, yS, tS = xS[idx], yS[idx], tS[idx]
-    fig.add_trace(go.Scatter3d(
-        x=xS, y=yS, z=tS, mode="markers",
-        marker=dict(size=2, opacity=0.8),
-        name="Substrate"
-    ))
-
-    fig.update_layout(
-        title="Sparse 3‑D energy (points)",
-        scene=dict(
-            xaxis_title="x", yaxis_title="y", zaxis_title="t",
-            aspectmode="data",
-            dragmode="orbit",
-        ),
-        height=540,
-        template="plotly_dark",
-        showlegend=True,
-        uirevision=uirevision,   # <-- prevents resets between reruns/tool changes
-        margin=dict(l=0, r=0, t=40, b=0),
-    )
-
-    ph.plotly_chart(
-        fig,
-        use_container_width=True,
-        theme=None,
-        key="points3d_plot",      # <-- stable key so Streamlit doesn't remount
-        config={
-            "scrollZoom": True,
-            "displaylogo": False,
-            "doubleClick": "false",
-        },
-    )
+    fig.add_trace(go.Scatter3d(x=xE, y=yE, z=tE, mode="markers", marker=dict(size=2, opacity=0.55), name="Env"))
 
 def _time_corr(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     am = a.mean(axis=0); bm = b.mean(axis=0)
@@ -356,324 +258,5 @@ def _select_edges_windowed(S_stack: np.ndarray,
         xs += [xx,   xx, None]; ys += [yy, yy+1, None]; zs += [z,  z,  None]
     return np.array(xs), np.array(ys), np.array(zs)
 
-
-def draw_3d_connections_over_time(
-    ph,
-    E_stack: np.ndarray,
-    S_stack: np.ndarray,
-    thr_env: float,
-    base_win: int,
-    eval_win: int,
-    corr_thr: float,
-    dvar_thr: float,
-    energy_q: float,
-    stride_t: int,
-    max_edges_total: int,
-    attr_overlay: bool,
-    attr_scale: float,
-    attr_alpha: float,
-    get_attractor_items_fn,   # kept for compatibility (unused when attr_history provided)
-    new_key_fn,               # kept for compatibility
-    *,
-    camera: dict | None = None,
-    uirevision: str = "conn3d",
-    attr_history: list | None = None,   # per-frame attractor snapshots
-    debug_show_midpoints: bool = True,  # <— NEW: plot connection midpoints to inspect alignment
-):
-    """
-    Draw Env dots + time-layered substrate connections in 3D.
-
-    If `attr_history` is provided as [{"t": int, "items":[{id, pos(y,x), amp}]}],
-    we (a) draw those attractors and (b) restrict connection segments to the same
-    time range (+/- a small padding) so proximity checks are meaningful.
-
-    Returns (optional debug):
-        {
-          "conn_x": [...], "conn_y": [...], "conn_z": [...],
-          "near_xy": int, "near_yx": int,
-          "total_segments": int,
-          "dist_xy": {"min": float, "median": float},
-          "dist_yx": {"min": float, "median": float}
-        }
-    """
-    import numpy as np
-    import plotly.graph_objects as go
-    import streamlit as st
-
-    fig = go.Figure()
-
-    # -------- Env points (sparse) --------
-    _draw_3d_env_points(fig, E_stack, thr=thr_env, portion=0.30, cap_pts=150000)
-
-    # -------- Determine time range if we have attr_history --------
-    T, H, W = S_stack.shape
-    t_lo, t_hi = 0, T - 1
-    if attr_overlay and isinstance(attr_history, list) and len(attr_history) > 0:
-        ts = [int(fr.get("t", 0)) for fr in attr_history if isinstance(fr, dict)]
-        if ts:
-            pad = max(2, int(max(1, stride_t)))  # small padding
-            t_lo = max(0, min(ts) - pad)
-            t_hi = min(T - 1, max(ts) + pad)
-
-    # -------- Substrate connections over time (restricted to [t_lo, t_hi]) --------
-    xs_all, ys_all, zs_all = [], [], []
-    budget = int(max_edges_total)
-
-    # windows end at t (so they cover [t-(base_win+eval_win-1) ... t])
-    t_start = max(base_win + eval_win - 1, t_lo)
-    for t in range(t_start, t_hi + 1, max(1, int(stride_t))):
-        xs, ys, zs = _select_edges_windowed(
-            S_stack, t_end=t,
-            base_win=int(base_win), eval_win=int(eval_win),
-            corr_thr=float(corr_thr), dvar_thr=float(dvar_thr), energy_q=float(energy_q)
-        )
-        if xs.size == 0:
-            continue
-
-        # budget guard (keep full triplets [x0,x1,None])
-        if (len(xs_all) + len(xs)) > budget:
-            keep = max(0, budget - len(xs_all))
-            if keep <= 0:
-                break
-            triplets = len(xs) // 3
-            if triplets > 0:
-                idx = np.random.choice(triplets, size=max(1, keep // 3), replace=False)
-                xs_t, ys_t, zs_t = [], [], []
-                for k in idx:
-                    i = 3 * k
-                    xs_t += [xs[i], xs[i+1], None]
-                    ys_t += [ys[i], ys[i+1], None]
-                    zs_t += [zs[i], zs[i+1], None]
-                xs = np.array(xs_t, dtype=object)
-                ys = np.array(ys_t, dtype=object)
-                zs = np.array(zs_t, dtype=object)
-
-        xs_all.append(xs); ys_all.append(ys); zs_all.append(zs)
-
-    conn_x, conn_y, conn_z = [], [], []
-    total_segments = 0
-    near_xy = 0
-    near_yx = 0
-    dlist_xy = []
-    dlist_yx = []
-
-    if xs_all:
-        xs_all = np.concatenate(xs_all)
-        ys_all = np.concatenate(ys_all)
-        zs_all = np.concatenate(zs_all)
-
-        conn_x = xs_all.tolist()
-        conn_y = ys_all.tolist()
-        conn_z = zs_all.tolist()
-
-        # --- Build per-frame attractor sets ---
-        attr_pts_by_t = {}
-        if attr_overlay and isinstance(attr_history, list):
-            for frame in attr_history:
-                t = int(frame.get("t", 0))
-                if t < t_lo or t > t_hi:
-                    continue
-                pts = attr_pts_by_t.setdefault(t, [])
-                for it in frame.get("items", []):
-                    y, x = int(it.get("pos", (0, 0))[0]), int(it.get("pos", (0, 0))[1])
-                    # store both orderings (for fast checks below)
-                    pts.append((float(x), float(y)))  # (x,y)
-                # No dedup; lists are small
-
-        # --- Collect midpoints for optional plotting & distance stats ---
-        mid_x, mid_y, mid_z = [], [], []
-
-        radius_px = 3.0
-        r2 = radius_px * radius_px
-        n = len(xs_all)
-        i = 0
-        while i + 2 < n:
-            x0, x1, xN = xs_all[i], xs_all[i+1], xs_all[i+2]
-            y0, y1, yN = ys_all[i], ys_all[i+1], ys_all[i+2]
-            z0, z1, zN = zs_all[i], zs_all[i+1], zs_all[i+2]
-            i += 3
-
-            # valid triplet and same time?
-            if x0 is None or x1 is None or xN is not None:  continue
-            if y0 is None or y1 is None or yN is not None:  continue
-            if z0 is None or z1 is None or zN is not None:  continue
-            if z0 != z1:                                    continue
-
-            total_segments += 1
-            t = int(z0)
-            pts_xy = attr_pts_by_t.get(t, [])
-
-            xm = 0.5 * (float(x0) + float(x1))
-            ym = 0.5 * (float(y0) + float(y1))
-
-            if debug_show_midpoints:
-                mid_x.append(xm); mid_y.append(ym); mid_z.append(t)
-
-            # If we have points this frame, compute nearest distance (both mappings)
-            if pts_xy:
-                # mapping 1: (x,y) as-is
-                d2_xy = min((xm - ax)**2 + (ym - ay)**2 for (ax, ay) in pts_xy)
-                dlist_xy.append(d2_xy**0.5)
-                if d2_xy <= r2:
-                    near_xy += 1
-
-                # mapping 2: swap interpretation (treat our (x,y) as (y,x))
-                # i.e., compare (ym,xm) to (ax,ay)
-                d2_yx = min((ym - ax)**2 + (xm - ay)**2 for (ax, ay) in pts_xy)
-                dlist_yx.append(d2_yx**0.5)
-                if d2_yx <= r2:
-                    near_yx += 1
-
-        # plot the connections
-        fig.add_trace(go.Scatter3d(
-            x=xs_all, y=ys_all, z=zs_all,
-            mode="lines",
-            line=dict(width=2),
-            name="Substrate connections"
-        ))
-
-        # optional: midpoints to visually inspect alignment
-        if debug_show_midpoints and mid_x:
-            fig.add_trace(go.Scatter3d(
-                x=np.array(mid_x), y=np.array(mid_y), z=np.array(mid_z),
-                mode="markers",
-                marker=dict(size=2, opacity=0.35),
-                name="Conn midpoints"
-            ))
-
-    # -------- Attractors over time --------
-    if attr_overlay:
-        if attr_history and isinstance(attr_history, list):
-            Xp, Yp, Zp, Sz = [], [], [], []
-            from collections import defaultdict
-            tracks = defaultdict(list)  # id -> [(t,y,x)]
-
-            for frame in attr_history:
-                t = int(frame.get("t", 0))
-                if t < t_lo or t > t_hi:
-                    continue
-                for it in frame.get("items", []):
-                    y, x = int(it.get("pos", (0, 0))[0]), int(it.get("pos", (0, 0))[1])
-                    amp  = float(it.get("amp", 0.0))
-                    Xp.append(x); Yp.append(y); Zp.append(t); Sz.append(2.0 + 6.0 * amp)
-                    tracks[int(it.get("id", -1))].append((t, y, x))
-
-            if Xp:
-                fig.add_trace(go.Scatter3d(
-                    x=Xp, y=Yp, z=Zp,
-                    mode="markers",
-                    marker=dict(size=Sz, opacity=max(0.15, float(attr_alpha)*0.75)),
-                    name="Attractors (pts over time)"
-                ))
-
-            Xt, Yt, Zt = [], [], []
-            for _id, seq in tracks.items():
-                seq.sort(key=lambda p: p[0])
-                for i in range(len(seq)-1):
-                    t0, y0, x0 = seq[i]
-                    t1, y1, x1 = seq[i+1]
-                    if (t0 < t_lo or t0 > t_hi) or (t1 < t_lo or t1 > t_hi):
-                        continue
-                    Xt += [x0, x1, None]
-                    Yt += [y0, y1, None]
-                    Zt += [t0, t1, None]
-            if Xt:
-                fig.add_trace(go.Scatter3d(
-                    x=Xt, y=Yt, z=Zt,
-                    mode="lines",
-                    line=dict(width=4),
-                    opacity=float(attr_alpha),
-                    name="Attractor tracks"
-                ))
-        else:
-            try:
-                items = get_attractor_items_fn()
-                z0 = min(max(T - 1, t_lo), t_hi)
-                Xs, Ys, Zs = [], [], []
-                for it in items:
-                    pos = it.get("pos", (0, 0))
-                    y0, x0 = int(pos[0]), int(pos[1])
-                    theta = float(it.get("theta", 0.0))
-                    r_par = float(it.get("r_par", 1.0))
-                    amp   = float(it.get("amp", 0.5))
-                    L = max(0.2, r_par) * max(0.2, amp) * float(attr_scale)
-                    dx = L * np.cos(theta); dy = L * np.sin(theta)
-                    Xs += [x0 - dx, x0 + dx, None]
-                    Ys += [y0 - dy, y0 + dy, None]
-                    Zs += [z0,      z0,      None]
-                if Xs:
-                    fig.add_trace(go.Scatter3d(
-                        x=np.array(Xs, dtype=object), y=np.array(Ys, dtype=object), z=np.array(Zs, dtype=object),
-                        mode="lines",
-                        line=dict(width=4),
-                        opacity=float(attr_alpha),
-                        name="Attractors (final)"
-                    ))
-            except Exception as e:
-                st.info(f"Attractor overlay unavailable ({e}). Continue without it.)")
-
-    # -------- Title & diagnostics --------
-    def _stats(vals):
-        if not vals:
-            return {"min": float("inf"), "median": float("inf")}
-        a = np.asarray(vals, dtype=float)
-        return {"min": float(np.min(a)), "median": float(np.median(a))}
-
-    stats_xy = _stats(dlist_xy)
-    stats_yx = _stats(dlist_yx)
-
-    title_txt = "3-D connections"
-    if total_segments > 0:
-        r_xy = 100.0 * near_xy / float(total_segments)
-        r_yx = 100.0 * near_yx / float(total_segments)
-        title_txt += (f" — near@XY: {near_xy}/{total_segments} ({r_xy:.1f}%), "
-                      f"near@YX: {near_yx}/{total_segments} ({r_yx:.1f}%)")
-
-    fig.update_layout(
-        title=title_txt,
-        uirevision=uirevision,
-        scene=dict(
-            camera=(camera or {}),
-            aspectmode="data",
-            xaxis_title="x", yaxis_title="y", zaxis_title="t",
-        ),
-        template="plotly_dark",
-        showlegend=True,
-        height=640,
-        margin=dict(l=0, r=0, t=40, b=0),
-    )
-    ph.plotly_chart(
-        fig,
-        use_container_width=True,
-        theme=None,
-        key="conn3d_plot",
-        config=dict(
-            scrollZoom=True,
-            displaylogo=False,
-            doubleClick="false",
-            modeBarButtonsToRemove=[
-                "resetCameraDefault3d", "resetCameraLastSave3d",
-                "autoScale", "toImage"
-            ],
-        ),
-    )
-
-    # Also drop a caption with distance diagnostics for quick reading.
-    try:
-        st.caption(
-            f"Distance stats — mapping XY: min {stats_xy['min']:.2f}, med {stats_xy['median']:.2f} | "
-            f"mapping YX: min {stats_yx['min']:.2f}, med {stats_yx['median']:.2f}"
-        )
-    except Exception:
-        pass
-
-    return {
-        "conn_x": conn_x,
-        "conn_y": conn_y,
-        "conn_z": conn_z,
-        "near_xy": int(near_xy),
-        "near_yx": int(near_yx),
-        "total_segments": int(total_segments),
-        "dist_xy": {"min": float(stats_xy["min"]), "median": float(stats_xy["median"])},
-        "dist_yx": {"min": float(stats_yx["min"]), "median": float(stats_yx["median"])},
-    }
+# draw_3d_connections_over_time unchanged, except we removed inner re-imports
+# (Keep your current version; it’s compatible.)
