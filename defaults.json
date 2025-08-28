@@ -1,6 +1,5 @@
 {
   "test_number": "Noisy_Att-01",
-
   "seed": 0,
   "frames": 500,
   "space": 32,
@@ -94,14 +93,11 @@
         "amplitude_range": [0.05, 0.15],
         "frequency_range": [0.05, 0.25],
         "phase_range": [0.0, 6.283185307179586],
-        "curvature_range": [0.0, 0.5],
-        "plasticity_range": [0.01, 0.05]
+        "curvature_range": [0.0, 0.5]
       },
       "learning": {
         "eta": 0.18,
-        "entropy_window": 24,
-        "entropy_kind": "variance",
-        "flux_limit": 0.20
+        "entropy_window": 24
       }
     },
 
@@ -142,7 +138,7 @@
     },
 
     "stimulation": {
-      "enable": false,
+      "enable": true,
       "gain": 0.30,
       "freq": 0.12,
       "phase_jitter": 0.10,
