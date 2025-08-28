@@ -141,115 +141,100 @@ _GLOBAL_TICK = 0
 
 class LocalState:
     def __init__(self, shape: Tuple[int, ...],
-             cfg_phys: Dict[str, Any],
-             cfg_f3: Optional[Dict[str, Any]],
-             rng: np.random.Generator):
+                 cfg_phys: Dict[str, Any],
+                 cfg_f3: Optional[Dict[str, Any]],
+                 rng: np.random.Generator):
         self.shape = shape
         self.ndim = len(shape)
         self.rng = rng
         self.t_idx = 0
-    
-        # ---------- legacy physics knobs ----------
+
+        # ---------- legacy physics knobs (still used) ----------
         self.T_base = float(_safe_get(cfg_phys, "T", 0.001))
         self.flux_limit = float(_safe_get(cfg_phys, "flux_limit", 0.2))
         self.boundary_leak = float(_safe_get(cfg_phys, "boundary_leak", 0.0))
-    
+
         # ---------- fuka3 config ----------
         f3 = cfg_f3 or {}
-        
-        # --- top-down stimulation (DishBrain-style), OFF by default ---
+
+        # --- top-down stimulation (DishBrain-style) ---
         f3S = f3.get("stimulation", {})
-        self.stim_enable       = bool(_safe_get(f3S, "enable", False))
-        self.stim_gain         = float(_safe_get(f3S, "gain", 0.25))      # amplitude of added stimulus
-        self.stim_freq_hz      = float(_safe_get(f3S, "freq", 0.15))      # base structured frequency
-        self.stim_phase_jit    = float(_safe_get(f3S, "phase_jitter", 0.15))
-        self.stim_freq_jit     = float(_safe_get(f3S, "freq_jitter", 0.10))
-        self.stim_noise_gain   = float(_safe_get(f3S, "noise_gain", 0.35))  # extra noise for weak encoding
-        self.stim_edge_kind    = str(_safe_get(f3S, "edge_kind", "both"))   # "kappa" | "gradS" | "both"
-        self.stim_edge_thr     = float(_safe_get(f3S, "edge_thr", 0.85))    # percentile threshold for edge mask
-        self.stim_radius_boost = float(_safe_get(f3S, "radius_boost", 1.0)) # widen attractor footprint
-        self.stim_energy_per_unit = float(_safe_get(f3S, "energy_per_unit", 0.0))  # 0.0 = no energy accounting
-    
-        # energy
+        self.stim_enable         = bool(_safe_get(f3S, "enable", False))
+        self.stim_gain           = float(_safe_get(f3S, "gain", 0.25))
+        self.stim_freq_hz        = float(_safe_get(f3S, "freq", 0.15))
+        self.stim_phase_jit      = float(_safe_get(f3S, "phase_jitter", 0.15))
+        self.stim_freq_jit       = float(_safe_get(f3S, "freq_jitter", 0.10))
+        self.stim_noise_gain     = float(_safe_get(f3S, "noise_gain", 0.35))
+        self.stim_edge_kind      = str(_safe_get(f3S, "edge_kind", "both"))  # "kappa" | "gradS" | "both"
+        self.stim_edge_thr       = float(_safe_get(f3S, "edge_thr", 0.85))
+        self.stim_radius_boost   = float(_safe_get(f3S, "radius_boost", 1.0))
+        self.stim_energy_per_unit= float(_safe_get(f3S, "energy_per_unit", 0.0))  # 0.0 = off
+
+        # --- energy model ---
         f3E = f3.get("energy", {})
         self.source_rate  = float(_safe_get(f3E, "source_rate", 1.0))
         self.transport_conductance = float(_safe_get(f3E, "transport_conductance", 0.15))
         self.work_to_dissipation_fraction = float(_safe_get(f3E, "work_to_dissipation_fraction", 0.9))
         self.step_cost_coeff = float(_safe_get(f3E, "step_cost_coeff", 0.01))
         self.alpha_energy_per_entropy = float(_safe_get(f3E, "alpha_energy_per_entropy", 1.0))
-    
-        # temperature
+
+        # --- temperature ---
         f3T = f3.get("temperature", {})
         self.T0 = float(_safe_get(f3T, "T0", self.T_base))
         self.beta_bound = float(_safe_get(f3T, "beta_bound", 0.01))
         self.beta_signal = float(_safe_get(f3T, "beta_signal", 0.0))
-    
-        # EMA (for encoding / entropy-drop)
+
+        # --- EMA (for encoding / entropy-drop) ---
         f3EMA = f3.get("ema", {})
         self.tau_fast = int(_safe_get(f3EMA, "tau_var_fast", 4))
         self.tau_slow = int(_safe_get(f3EMA, "tau_var_slow", 32))
         self._alpha_fast = 1.0 / max(1, self.tau_fast)
         self._alpha_slow = 1.0 / max(1, self.tau_slow)
-    
-        # connections / denoising
-        f3C = f3.get("connection", {})
+
+        # --- connections / denoising knobs still used by learning path ---
+        f3C  = f3.get("connection", {})
         f3Ci = f3C.get("init", {})
         f3Cl = f3C.get("learning", {})
-        self.eta = float(_safe_get(f3Cl, "eta", 0.05))
+        self.eta         = float(_safe_get(f3Cl, "eta", 0.05))
         self.entropy_window = int(_safe_get(f3Cl, "entropy_window", 16))
-        self.entropy_kind = str(_safe_get(f3Cl, "entropy_kind", "variance"))
-        self.use_sinusoid = bool(_safe_get(f3.get("denoising", {}), "use_sinusoid_term", True))
-        self.kappa_scale = float(_safe_get(f3.get("denoising", {}), "kappa_scale", 1.0))
-        self.grad_clip   = float(_safe_get(f3.get("denoising", {}), "gradient_clip", 1.0))
-    
-        self.A_range       = tuple(_safe_get(f3Ci, "amplitude_range", (0.05, 0.15)))
-        self.f_range       = tuple(_safe_get(f3Ci, "frequency_range", (0.05, 0.25)))
-        self.phi_range     = tuple(_safe_get(f3Ci, "phase_range", (0.0, 2*np.pi)))
-        self.kappa_range   = tuple(_safe_get(f3Ci, "curvature_range", (0.0, 0.1)))
-        self.plasticity_range = tuple(_safe_get(f3Ci, "plasticity_range", (0.01, 0.05)))
-    
-        # attractors (Option-B)
+        # denoising
+        den = f3.get("denoising", {})
+        self.use_sinusoid = bool(_safe_get(den, "use_sinusoid_term", True))
+        self.kappa_scale  = float(_safe_get(den, "kappa_scale", 1.0))
+        self.grad_clip    = float(_safe_get(den, "gradient_clip", 1.0))
+
+        # parameter ranges (used to initialize fields that the learner updates)
+        self.A_range     = tuple(_safe_get(f3Ci, "amplitude_range", (0.05, 0.15)))
+        self.f_range     = tuple(_safe_get(f3Ci, "frequency_range", (0.05, 0.25)))
+        self.phi_range   = tuple(_safe_get(f3Ci, "phase_range", (0.0, 2*np.pi)))
+        self.kappa_range = tuple(_safe_get(f3Ci, "curvature_range", (0.0, 0.1)))
+
+        # --- attractors (DishBrain strategy) ---
         f3A = f3.get("attractors", {})
-        self.attr_spawn_prob_base  = float(_safe_get(f3A, "spawn_prob_base", 0.003))
-        self.attr_spawn_bias_w_env = float(_safe_get(f3A, "spawn_bias_env_weight", 0.6))
-        self.attr_spawn_energy     = float(_safe_get(f3A, "spawn_energy", 0.05))
-        self.attr_amp_init   = float(_safe_get(f3A, "amplitude_init", 0.05))
-        self.attr_amp_min    = float(_safe_get(f3A, "amplitude_min", 0.005))
-        self.attr_amp_max    = float(_safe_get(f3A, "amplitude_max", 0.5))
-        self.attr_maint_rate = float(_safe_get(f3A, "maint_cost_rate", 0.001))
-        self.attr_decay      = float(_safe_get(f3A, "decay_rate", 0.01))
-        self.attr_bank_leak  = float(_safe_get(f3A, "bank_leak", 0.02))
+        self.attr_spawn_energy  = float(_safe_get(f3A, "spawn_energy", 0.05))
+        self.attr_spawn_trials  = int(_safe_get(f3A, "spawn_trials", 32))   # max spawns per tick
+        self.attr_max           = int(_safe_get(f3A, "max_count", 256))
+        self.attr_amp_init      = float(_safe_get(f3A, "amplitude_init", 0.05))
+        self.attr_amp_min       = float(_safe_get(f3A, "amplitude_min", 0.005))
+        self.attr_amp_max       = float(_safe_get(f3A, "amplitude_max", 0.5))
+        self.attr_maint_rate    = float(_safe_get(f3A, "maint_cost_rate", 0.001))
+        self.attr_decay         = float(_safe_get(f3A, "decay_rate", 0.01))
+        self.attr_bank_leak     = float(_safe_get(f3A, "bank_leak", 0.02))  # harmless to keep
+
         shapeA = f3A.get("shape", {})
-        self.r_par_rng     = tuple(_safe_get(shapeA, "r_parallel_range", (2.0, 6.0)))
-        self.r_perp_rng    = tuple(_safe_get(shapeA, "r_perp_range", (1.0, 3.0)))
-        self.theta_jitter  = float(_safe_get(shapeA, "theta_jitter", 0.3))
-        infl = f3A.get("influence", {})
-        self.c_theta_rho  = float(_safe_get(infl, "c_theta_rho", 0.5))
-        self.c_theta_H    = float(_safe_get(infl, "c_theta_H",   0.5))
-        self.c_alpha      = float(_safe_get(infl, "c_alpha",     0.25))
-        self.c_beta       = float(_safe_get(infl, "c_beta",      0.25))
-        self.birth_mul_kappa = float(_safe_get(infl, "birth_multiplier_kappa", 0.5))
-        self.attr_max         = int(_safe_get(f3A, "max_count", 256))
-        self.attr_spawn_trials= int(_safe_get(f3A, "spawn_trials", 32))
-    
-        # encoding-aware attractor guidance knobs
+        self.r_par_rng  = tuple(_safe_get(shapeA, "r_parallel_range", (2.0, 6.0)))
+        self.r_perp_rng = tuple(_safe_get(shapeA, "r_perp_range", (1.0, 3.0)))
+
+        # encoding-aware attractor guidance (kept minimal)
         enc = f3A.get("encoding", {})
-        self.enc_beta            = float(_safe_get(enc, "beta", 0.10))       # smoothing of enc_map
-        self.enc_env_weight      = float(_safe_get(enc, "env_weight", 0.40))
-        self.enc_spawn_env_coeff = float(_safe_get(enc, "spawn_env_coeff", 0.80))
-        self.enc_spawn_enc_coeff = float(_safe_get(enc, "spawn_enc_coeff", 1.60))
-        self.enc_radius_par_mult  = float(_safe_get(enc, "radius_par_mult", 0.80))
-        self.enc_radius_perp_mult = float(_safe_get(enc, "radius_perp_mult", 0.40))
-        self.enc_amp_mult         = float(_safe_get(enc, "amp_mult", 0.50))
-        self.enc_jitter_reduction = float(_safe_get(enc, "jitter_reduction", 0.70))
-        self.enc_signal_noise_base= float(_safe_get(enc, "signal_noise_base", 0.50))
-        self.enc_signal_noise_red = float(_safe_get(enc, "signal_noise_reduction", 0.70))
-        self.enc_influence_gain   = float(_safe_get(enc, "influence_enc_gain", 2.0))
-        self.enc_param_damp_gain  = float(_safe_get(enc, "param_damp_gain", 1.5))
-    
-        # keep the full f3 config for noise knobs used in _noise_from_encoding
+        self.enc_beta              = float(_safe_get(enc, "beta", 0.10))  # smoothing for enc_map
+        self.enc_radius_par_mult   = float(_safe_get(enc, "radius_par_mult", 0.80))
+        self.enc_radius_perp_mult  = float(_safe_get(enc, "radius_perp_mult", 0.40))
+        self.enc_amp_mult          = float(_safe_get(enc, "amp_mult", 0.50))
+
+        # keep full f3 cfg for optional noise knobs read by _noise_from_encoding()
         self.f3_cfg = cfg_f3 or {}
-    
+
         # ---------- fields & encoding EMAs ----------
         if self.ndim == 1:
             X = shape[0]
@@ -257,78 +242,73 @@ class LocalState:
             self.F = np.full((X,), 0.5, float)
             self.B = np.zeros((X,), float)
             self.T = np.full((X,), self.T0, float)
-    
+
             self.A     = self.rng.uniform(*self.A_range, size=E)
             self.freq  = self.rng.uniform(*self.f_range, size=E)
             self.phi   = self.rng.uniform(*self.phi_range, size=E)
             self.kappa = self.rng.uniform(*self.kappa_range, size=E)
-    
-            # encoding EMAs (1D)
+
             self._ent_fast = np.zeros((X,), dtype=float)
             self._ent_slow = np.zeros((X,), dtype=float)
-            self.enc_map   = np.zeros((X,), dtype=float)
-            self.enc_strength = self.enc_map  # alias
+            self.enc_map   = np.zeros((X,), dtype=float)  # alias still exists for parity
+            self.enc_strength = self.enc_map
         else:
             H, W = shape
             self.F = np.full((H, W), 0.5, float)
             self.B = np.zeros((H, W), float)
             self.T = np.full((H, W), self.T0, float)
-    
+
             self.A     = self.rng.uniform(*self.A_range, size=(H, W))
             self.freq  = self.rng.uniform(*self.f_range, size=(H, W))
             self.phi   = self.rng.uniform(*self.phi_range, size=(H, W))
             self.kappa = self.rng.uniform(*self.kappa_range, size=(H, W))
-    
-            # encoding EMAs (2D)
+
             self._ent_fast = np.zeros((H, W), dtype=float)
             self._ent_slow = np.zeros((H, W), dtype=float)
             self.enc_map   = np.zeros((H, W), dtype=float)
-            self.enc_strength = self.enc_map  # alias
-    
+            self.enc_strength = self.enc_map
+
         # ---------- attractor store ----------
         self.attractors: List[Attractor] = []
         self._next_attr_id = 1
-    
+
         # ---------- metrics cache ----------
         self._last_spent  = 0.0
         self._last_dissip = 0.0
 
+
     def _conn_strength_maps(self, S: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Returns (enc_n, kabs_n, strength) all in [0,1], same shape as S/kappa.
-        strength := sqrt( enc_n * kabs_n ).  Uses self.enc_map, self.kappa, and optionally S gradients.
+        Returns (enc_n, kabs_n, strength) all in [0,1], same shape as κ/S.
+        strength := sqrt( enc_n * kabs_n ), with a mild |∇S| boost when S is given.
         """
         if self.ndim != 2:
             Z = np.zeros_like(self.kappa)
             return Z, Z, Z
     
-        # enc map (already 0..1-ish but robust-normalize)
-        enc = getattr(self, "enc_map", None)
-        if enc is None:
-            enc = np.zeros_like(self.kappa)
-    
         def _safe_norm(A: np.ndarray) -> np.ndarray:
-            lo = float(np.min(A)); hi = float(np.max(A))
+            a = np.asarray(A, dtype=float)
+            lo = float(np.min(a)); hi = float(np.max(a))
             if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
-                return np.zeros_like(A)
-            return (A - lo) / (hi - lo + 1e-12)
+                return np.zeros_like(a)
+            return (a - lo) / (hi - lo + 1e-12)
+    
+        enc = getattr(self, "enc_map", None)
+        if enc is None or enc.shape != self.kappa.shape:
+            enc = np.zeros_like(self.kappa)
     
         enc_n  = np.clip(_safe_norm(enc), 0.0, 1.0)
         kabs_n = np.clip(_safe_norm(np.abs(self.kappa)), 0.0, 1.0)
     
-        # primary strength: encoding × |kappa|
         strength = np.sqrt(enc_n * kabs_n)
     
-        # (Optional) modest boost from current gradients if S provided
         if S is not None and S.size == self.kappa.size:
             G = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
             g_n = _safe_norm(G)
-            # blend in a bit of gradient evidence without overpowering κ
             strength = np.clip(0.85 * strength + 0.15 * g_n, 0.0, 1.0)
     
         return enc_n, kabs_n, strength
         
-    
     # ----- energy & temperature -----
     def _inject_sources(self, env_like: np.ndarray):
         # inject into top‑energy percent (simple local uptake)
@@ -495,27 +475,6 @@ class LocalState:
         reward_map = np.full_like(S, dS_sum / max(1, S.size))
         return energy_paid_map, reward_map
 
-    # =======================
-    # Selection / propagation
-    # =======================
-
-    def _reward_and_select(self, reward_map: np.ndarray, energy_map: np.ndarray):
-        if self.ndim != 2 or not self.attractors:
-            return
-        H, W = self.shape
-        win = max(1, int(2 * np.mean(self.r_par_rng)))
-        for k in self.attractors:
-            y0 = max(0, k.pos[0] - win); y1 = min(H, k.pos[0] + win + 1)
-            x0 = max(0, k.pos[1] - win); x1 = min(W, k.pos[1] + win + 1)
-            Wmask = k.field(H, W)[y0:y1, x0:x1]
-            Wmask /= (1e-12 + np.sum(Wmask))
-            r = float(np.sum(Wmask * reward_map[y0:y1, x0:x1]))
-            e = float(np.sum(Wmask * energy_map[y0:y1, x0:x1]))
-            eff = r / (e + 1e-12)
-            k.reward_avg = 0.9 * k.reward_avg + 0.1 * eff
-            # bank -> amplitude (bounded)
-            k.amp = float(np.clip(k.amp + 0.1 * (eff - k.reward_avg) * k.amp, 0.0, self.attr_amp_max))
-
     def _encoding_at(self, y: int, x: int) -> float:
         if self.ndim != 2:
             return 0.0
@@ -591,11 +550,11 @@ class LocalState:
 
     def _stimulus_topdown(self, t_idx: int, S: np.ndarray) -> Optional[np.ndarray]:
         """
-        Produce a top-down attractor-driven stimulus the same shape as S.
-        - Structured near strong encoding (enc_map) AND strong connections (|kappa|)
-        - Noise near weak encoding/connection regions
-        - Aligned with the attractor orientation (projects onto local ∇S)
-        - Gated to edge mask; optionally consumes energy
+        Top-down attractor-driven stimulus (DishBrain-style).
+        - Uses connection strength from _conn_strength_maps(S).
+        - Projects along attractor orientation (local ∇S).
+        - Gated by edge mask.
+        - Applies 'gain' INSIDE this function (don't multiply again outside).
         """
         if (self.ndim != 2) or (not getattr(self, "stim_enable", False)) or (not self.attractors):
             return None
@@ -605,26 +564,13 @@ class LocalState:
         if not np.any(edge_m):
             return None
     
-        # enc/strength maps
-        enc = getattr(self, "enc_map", None)
-        if enc is None or enc.shape != S.shape:
-            enc = np.zeros_like(S)
-        kabs = np.abs(self.kappa)
-        # normalize robustly
-        def _safe_norm(A: np.ndarray) -> np.ndarray:
-            lo = float(np.min(A)); hi = float(np.max(A))
-            if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
-                return np.zeros_like(A)
-            return (A - lo) / (hi - lo + 1e-12)
-        enc_n  = _safe_norm(enc)
-        kabs_n = _safe_norm(kabs)
-        # strength: where both encoding and |kappa| are high
-        strength = np.sqrt(np.clip(enc_n, 0, 1) * np.clip(kabs_n, 0, 1))
+        # Connection strength (enc×|kappa| with mild ∇S boost)
+        enc_n, _, strength = self._conn_strength_maps(S)
     
         # local edge orientation (from S)
         Sx = _grad2d_x(S); Sy = _grad2d_y(S)
     
-        # global structured carrier
+        # structured carrier & gains
         w0   = 2.0 * np.pi * float(getattr(self, "stim_freq_hz", 0.15))
         gain = float(getattr(self, "stim_gain", 0.25))
         n_g  = float(getattr(self, "stim_noise_gain", 0.35))
@@ -634,15 +580,13 @@ class LocalState:
             y0, x0 = a.pos
             Wk = a.field(H, W)  # normalized * amp
     
-            # widen footprint a touch if requested
+            # optional slight widening of footprint
             if self.stim_radius_boost > 1.01:
                 G = np.abs(_grad2d_x(Wk)) + np.abs(_grad2d_y(Wk))
                 Wk = np.clip(Wk + (self.stim_radius_boost - 1.0) * G, 0.0, None)
     
-            # encoding at attractor center
+            # encoding at attractor center (reduces jitter where well-encoded)
             enc_loc = float(enc_n[y0, x0]) if (0 <= y0 < H and 0 <= x0 < W) else 0.0
-    
-            # jitter down when well-encoded
             f_jit  = float(getattr(self, "stim_freq_jit", 0.10))  * (1.0 - enc_loc) * self.rng.normal(0.0, 1.0)
             ph_jit = float(getattr(self, "stim_phase_jit", 0.15)) * (1.0 - enc_loc) * self.rng.normal(0.0, 1.0)
     
@@ -652,7 +596,7 @@ class LocalState:
             dx = np.cos(a.theta); dy = np.sin(a.theta)
             edge_proj = dx * Sx + dy * Sy  # signed projection
     
-            # reward vs penalty
+            # structure + noise, weighted by strength and footprint
             d_struct = carrier * edge_proj * strength * Wk
             d_noise  = (1.0 - strength) * Wk * self.rng.standard_normal(size=(H, W))
     
@@ -661,7 +605,7 @@ class LocalState:
         # inject only on selected edges
         drive *= edge_m
     
-        # --- energy accounting (optional) ---
+        # optional energy accounting
         epu = float(getattr(self, "stim_energy_per_unit", 0.0))
         if epu > 0.0:
             E_units = float(np.mean(np.abs(drive)))  # proxy
@@ -676,97 +620,36 @@ class LocalState:
     
         return drive
 
-    def _local_tangent_theta(S: np.ndarray, y: int, x: int) -> float:
-        """
-        Orientation to act along a *connection edge*.
-        We take the tangent to the local gradient: theta = arg(∇S) + π/2.
-        """
-        H, W = S.shape
-        y = int(np.clip(y, 0, H-1)); x = int(np.clip(x, 0, W-1))
-        gx = _grad2d_x(S); gy = _grad2d_y(S)
-        th = np.arctan2(gy[y, x], gx[y, x]) + np.pi * 0.5
-        # normalize to (-π, π]
-        th = (th + np.pi) % (2*np.pi) - np.pi
-        return float(th)
-    
-    
-    def _nms_peaks(A: np.ndarray, k: int, radius: int) -> List[Tuple[int,int,float]]:
-        """
-        Simple non-max suppression on map A (H,W):
-        returns up to k peaks as [(y,x,val), ...] sorted by val desc.
-        """
-        H, W = A.shape
-        taken = np.zeros_like(A, dtype=bool)
-        peaks = []
-        flat_idx = np.argsort(A.ravel())[::-1]  # high→low
-        r = int(max(1, radius))
-        for idx in flat_idx:
-            if len(peaks) >= int(max(1, k)): break
-            y, x = divmod(int(idx), W)
-            if taken[y, x]: continue
-            v = float(A[y, x])
-            if v <= 0.0: break
-            peaks.append((y, x, v))
-            y0 = max(0, y - r); y1 = min(H, y + r + 1)
-            x0 = max(0, x - r); x1 = min(W, x + r + 1)
-            taken[y0:y1, x0:x1] = True
-        return peaks
-
     def _spawn_dishbrain(self, S: np.ndarray, E: np.ndarray):
         """
         Deterministic spawn: place attractors on strong connection ridges.
-        - Strength = sqrt( enc * |kappa| ) with mild |∇S| boost.
-        - Pick top-K non-overlapping peaks (quantile-thresholded).
+        - Strength from _conn_strength_maps(S).
+        - Pick top non-overlapping peaks above a quantile threshold.
         - Theta aligns with local ∇S orientation (no random θ).
         - Radii/amp scale with local encoding; noise from connection strength.
         - Energy-gated; no random propagation.
         """
-        if self.ndim != 2:
-            return
-        if len(self.attractors) >= self.attr_max:
-            return
-        if S.size == 0:
+        if self.ndim != 2 or len(self.attractors) >= self.attr_max or S.size == 0:
             return
     
         H, W = self.shape
     
-        # ---- strength map: sqrt(enc × |kappa|) with mild grad boost ----
-        enc = getattr(self, "enc_map", None)
-        if enc is None or enc.shape != S.shape:
-            enc = np.zeros_like(S)
+        # strength := sqrt(enc × |kappa|) with mild ∇S boost (done inside helper)
+        enc_n, _, strength = self._conn_strength_maps(S)
     
-        def _safe_norm(A: np.ndarray) -> np.ndarray:
-            lo = float(np.min(A)); hi = float(np.max(A))
-            if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
-                return np.zeros_like(A)
-            return (A - lo) / (hi - lo + 1e-12)
-    
-        enc_n  = _safe_norm(enc)
-        kabs_n = _safe_norm(np.abs(self.kappa))
-    
-        # mild gradient evidence
-        G = np.abs(_grad2d_x(S)) + np.abs(_grad2d_y(S))
-        g_n = _safe_norm(G)
-    
-        strength = np.clip(0.85 * np.sqrt(enc_n * kabs_n) + 0.15 * g_n, 0.0, 1.0)
-    
-        # ---- candidate peaks above quantile threshold ----
-        # Use the same "edge" percentile knob to set how selective we are.
+        # candidate threshold using the same 'edge' percentile knob
         thr_q = float(np.clip(getattr(self, "stim_edge_thr", 0.85), 0.0, 1.0))
         thr_v = float(np.quantile(strength, thr_q)) if strength.size else 1.0
         cand_mask = (strength >= thr_v)
-    
         if not np.any(cand_mask):
             return
     
-        # ---- non-maximum suppression over small neighborhood ----
-        # We compute local argmax within (2r+1)^2 around each candidate and keep only true peaks.
-        r_nms = 2  # small, tight peaks
+        # non-maximum suppression over a tight neighborhood
+        r_nms = 2
         peaks_yx = []
         visited = np.zeros_like(cand_mask, dtype=bool)
-        # Sort all candidates by strength high->low, then sweep and keep only non-overlapping
         ys, xs = np.where(cand_mask)
-        order = np.argsort(-strength[ys, xs])
+        order = np.argsort(-strength[ys, xs])  # high -> low
         for idx in order:
             y0, x0 = int(ys[idx]), int(xs[idx])
             if visited[y0, x0]:
@@ -776,16 +659,15 @@ class LocalState:
             patch = strength[yL:yH, xL:xH]
             iy, ix = np.unravel_index(int(np.argmax(patch)), patch.shape)
             yp, xp = yL + int(iy), xL + int(ix)
-            # mark neighborhood as visited so we don't keep multiple close peaks
             visited[yL:yH, xL:xH] = True
             peaks_yx.append((int(yp), int(xp)))
     
         if not peaks_yx:
             return
     
-        # ---- select at most K per tick and enforce min spacing from existing attractors ----
+        # select at most K per tick and enforce spacing from existing attractors
         max_per_tick = int(max(1, min(self.attr_spawn_trials, self.attr_max - len(self.attractors))))
-        min_dist = 3.0  # pixels; prevents clumping
+        min_dist = 3.0  # pixels
         exist = [(int(a.pos[0]), int(a.pos[1])) for a in self.attractors]
     
         def _far_from_existing(y, x) -> bool:
@@ -807,18 +689,18 @@ class LocalState:
             if self.F[y, x] < self.attr_spawn_energy:
                 continue
     
-            # orientation from local gradient (avoid divide-by-zero)
-            gx = float(Sx[y, x]) if 0 <= y < H and 0 <= x < W else 0.0
-            gy = float(Sy[y, x]) if 0 <= y < H and 0 <= x < W else 0.0
+            # orientation from local gradient
+            gx = float(Sx[y, x])
+            gy = float(Sy[y, x])
             theta = float(np.arctan2(gy, gx)) if (gx*gx + gy*gy) > 1e-12 else 0.0
     
-            # encoding-driven radii and amplitude (no randomness)
+            # encoding-driven radii & amplitude (no randomness)
             enc_loc = float(enc_n[y, x])
             r_par  = float(np.mean(self.r_par_rng)  * (1.0 + self.enc_radius_par_mult  * enc_loc))
             r_perp = float(np.mean(self.r_perp_rng) * (1.0 + self.enc_radius_perp_mult * enc_loc))
             amp    = float(self.attr_amp_init      * (1.0 + self.enc_amp_mult         * enc_loc))
     
-            # noise tuned by strength
+            # noise tuned by local connection strength
             sig_theta, sig_signal = self._noise_from_encoding(y, x)
     
             # pay energy & spawn
@@ -953,7 +835,7 @@ def step_physics(
     if getattr(st, "stim_enable", False):
         stim = st._stimulus_topdown(t_idx, new_S)
         if stim is not None:
-            new_S = new_S + float(getattr(st, "stim_gain", 0.25)) * stim
+            new_S = new_S + stim
 
     # (No selection/propagation stage; keep it simple and clean)
 
@@ -999,14 +881,18 @@ def step_physics(
 # ============================================================
 # Metrics (public)
 # ============================================================
-
 def get_fuka3_metrics():
     """
-    Return a list of metrics dicts, one per active substrate shape/state.
-    Provides:
-      - entropy_mean         : from substrate S (gradient-based in 2D, rolling-var in 1D)
-      - entropy_p95          : p95 of the same S-based entropy field
-      - entropy_mean_kappa   : diagnostic entropy-like proxy computed from kappa
+    Per-active substrate metrics (shape-scoped LocalState).
+    Reports:
+      - free/bound energy totals
+      - mean temperature
+      - S-based entropy (mean & p95)
+      - κ diagnostic entropy (mean)
+      - connections_alive (non-zero κ count)
+      - attractors_alive (count)
+      - energy/dissipation paid in last tick
+      - efficiency ratio (entropy_mean / work_paid_per_tick)
     """
     out = []
     for shape, st in list(_STATES.items()):
@@ -1015,23 +901,20 @@ def get_fuka3_metrics():
             B_total = float(np.sum(st.B))
             T_mean  = float(np.mean(st.T))
 
-            # --- Build S-based entropy field (depends on dimensionality) ---
+            # --- S-based entropy field (depends on dimensionality) ---
             ent_mean_S = 0.0
             ent_p95_S  = 0.0
             if hasattr(st, "_last_S"):
                 if st.ndim == 1:
-                    # rolling variance of S itself (1D)
                     ent_field_S = _rolling_var_1d(st._last_S, win=max(3, st.entropy_window))
-                    ent_mean_S  = float(np.mean(ent_field_S)) if ent_field_S.size else 0.0
-                    ent_p95_S   = float(np.percentile(ent_field_S, 95)) if ent_field_S.size else 0.0
                 else:
-                    # variance of gradient magnitude (2D)
                     Gmag = np.abs(_grad2d_x(st._last_S)) + np.abs(_grad2d_y(st._last_S))
                     ent_field_S = _box_var2d(Gmag)
-                    ent_mean_S  = float(np.mean(ent_field_S)) if ent_field_S.size else 0.0
-                    ent_p95_S   = float(np.percentile(ent_field_S, 95)) if ent_field_S.size else 0.0
+                if ent_field_S.size:
+                    ent_mean_S = float(np.mean(ent_field_S))
+                    ent_p95_S  = float(np.percentile(ent_field_S, 95))
 
-            # --- κ-based diagnostic (same shape as S in 2D; 1D uses diff proxy) ---
+            # --- κ-based diagnostic entropy proxy ---
             if st.ndim == 1:
                 ent_field_k = np.abs(np.diff(st.kappa)) if st.kappa.size > 1 else np.zeros(1, dtype=float)
                 ent_mean_k  = float(np.mean(ent_field_k))
@@ -1039,10 +922,8 @@ def get_fuka3_metrics():
                 ent_field_k = _box_var2d(st.kappa) if st.kappa.size > 1 else np.zeros_like(st.kappa)
                 ent_mean_k  = float(np.mean(ent_field_k))
 
-            # --- other counters / bookkeeping ---
             attrs_alive = len(getattr(st, "attractors", []))
-            avg_reward  = float(np.mean([getattr(a, "reward_avg", 0.0) for a in st.attractors])) if attrs_alive else 0.0
-            last_spent  = float(getattr(st, "_last_spent", 0.0))            
+            last_spent  = float(getattr(st, "_last_spent", 0.0))
             last_diss   = float(getattr(st, "_last_dissip", 0.0))
             conn_alive  = int(np.sum(np.abs(st.kappa) > 1e-6))
             eff_ratio   = (ent_mean_S / (last_spent + 1e-12)) if last_spent > 0.0 else 0.0
@@ -1053,25 +934,20 @@ def get_fuka3_metrics():
                 "free_energy_total": F_total,
                 "bound_energy_total": B_total,
                 "temperature_mean": T_mean,
-
-                # S-based entropy signal (what your UI reads)
                 "entropy_mean": ent_mean_S,
-                "entropy_p95":  ent_p95_S,
-
-                # diagnostic κ “entropy”
+                "entropy_p95": ent_p95_S,
                 "entropy_mean_kappa": ent_mean_k,
-
                 "connections_alive": conn_alive,
                 "attractors_alive": int(attrs_alive),
-                "avg_reward": avg_reward,
                 "work_paid_per_tick": last_spent,
                 "dissipation_per_tick": last_diss,
                 "efficiency_ratio": eff_ratio,
             })
         except Exception:
-            # don't let a single bad state kill the metrics panel
+            # be robust to any single-state hiccup
             continue
     return out
+
     
 # ------------------------------------------------------------
 # Attractors snapshot for UI (used by app.py overlay)
