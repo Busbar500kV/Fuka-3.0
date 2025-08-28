@@ -328,36 +328,6 @@ class LocalState:
     
         return enc_n, kabs_n, strength
         
-    def _snap_to_connection(self, y: int, x: int, r_search: int, S_hint: Optional[np.ndarray] = None) -> Tuple[int, int]:
-        """
-        Snap (y,x) to the local argmax of 'connection strength' within a (2r+1)^2 window.
-        Uses encoding×|kappa| (and a small |∇S| boost if S_hint provided / available via _last_S).
-        If nothing strong nearby, returns the original (y,x).
-        """
-        if self.ndim != 2 or r_search <= 0:
-            return y, x
-    
-        H, W = self.shape
-        S_use = S_hint if (S_hint is not None) else getattr(self, "_last_S", None)
-    
-        enc_n, kabs_n, strength = self._conn_strength_maps(S_use)
-    
-        y0 = max(0, y - r_search); y1 = min(H, y + r_search + 1)
-        x0 = max(0, x - r_search); x1 = min(W, x + r_search + 1)
-        patch = strength[y0:y1, x0:x1]
-        if patch.size == 0:
-            return y, x
-    
-        # Require the local max to be above a global quantile, so we don't snap into noise.
-        thr_q = float(np.clip(getattr(self, "stim_edge_thr", 0.85), 0.0, 1.0))
-        global_thr = float(np.quantile(strength, thr_q)) if strength.size else 1.0
-    
-        iy, ix = np.unravel_index(int(np.argmax(patch)), patch.shape)
-        y_new, x_new = y0 + int(iy), x0 + int(ix)
-    
-        if float(strength[y_new, x_new]) >= global_thr:
-            return y_new, x_new
-        return y, x
     
     # ----- energy & temperature -----
     def _inject_sources(self, env_like: np.ndarray):
@@ -395,72 +365,6 @@ class LocalState:
             T = T + self.beta_signal * signal_var
         self.T = T
 
-    # ----------------------------------------
-    # MOD: use encoding when spawning
-    # ----------------------------------------
-    def _maybe_spawn(self, env_like: np.ndarray):
-        if self.ndim != 2:
-            return
-        if len(self.attractors) >= self.attr_max:
-            return
-    
-        H, W = self.shape
-        if env_like.size == 0:
-            return
-    
-        # normalized env magnitude
-        Eabs = np.abs(env_like)
-        En = Eabs / (1e-12 + np.max(Eabs))
-    
-        trials = max(1, min(self.attr_spawn_trials, self.attr_max - len(self.attractors)))
-        for _ in range(trials):
-            y = int(self.rng.integers(0, H))
-            x = int(self.rng.integers(0, W))
-    
-            env_loc = float(En[y, x])
-            enc_loc = float(self._encoding_at(y, x))  # [0,1]
-    
-            # base prob × env bias × encoding bias
-            p_base  = self.attr_spawn_prob_base * (1.0 + self.attr_spawn_bias_w_env * env_loc)
-            p_spawn = p_base * (1.0 + self.enc_spawn_env_coeff * env_loc + self.enc_spawn_enc_coeff * enc_loc)
-    
-            if self.rng.random() >= p_spawn:
-                continue
-    
-            # draw base geometry
-            r_par  = float(self.rng.uniform(*self.r_par_rng))
-            r_perp = float(self.rng.uniform(*self.r_perp_rng))
-            theta  = float(self.rng.uniform(-np.pi, np.pi))
-    
-            # --- NEW: snap birth position onto a nearby connection ridge ---
-            r_search = max(2, int(round(r_par)))
-            y_sn, x_sn = self._snap_to_connection(y, x, r_search)
-    
-            # encoding-driven newborn params (unchanged)
-            enc_loc_sn = float(self._encoding_at(y_sn, x_sn))
-            r_par  *= (1.0 + self.enc_radius_par_mult  * enc_loc_sn)
-            r_perp *= (1.0 + self.enc_radius_perp_mult * enc_loc_sn)
-            amp     = float(self.attr_amp_init * (1.0 + self.enc_amp_mult * enc_loc_sn))
-    
-            # noise tuned by *connection strength* (encoding×|kappa|), not encoding alone
-            sig_theta, sig_signal = self._noise_from_encoding(y_sn, x_sn)
-    
-            # energy check/pay at the actual snapped location
-            if self.F[y_sn, x_sn] < self.attr_spawn_energy:
-                continue  # not enough free energy here
-    
-            # pay energy & spawn
-            self.F[y_sn, x_sn] -= self.attr_spawn_energy
-            self.B[y_sn, x_sn] += self.work_to_dissipation_fraction * self.attr_spawn_energy
-            k = Attractor(self._next_attr_id, (y_sn, x_sn), r_par, r_perp, theta,
-                          amp, self.attr_maint_rate, self.attr_decay,
-                          sigma_theta=float(sig_theta), sigma_signal=float(sig_signal))
-            self._next_attr_id += 1
-            self.attractors.append(k)
-    
-            if len(self.attractors) >= self.attr_max:
-                break
-    
     def _entropy_field(self, S: np.ndarray) -> np.ndarray:
         if self.ndim == 1:
             return _rolling_var_1d(S, win=max(3, self.entropy_window))
@@ -811,37 +715,144 @@ class LocalState:
             self._last_dissip += dissip
     
         return drive
+
+    def _local_tangent_theta(S: np.ndarray, y: int, x: int) -> float:
+        """
+        Orientation to act along a *connection edge*.
+        We take the tangent to the local gradient: theta = arg(∇S) + π/2.
+        """
+        H, W = S.shape
+        y = int(np.clip(y, 0, H-1)); x = int(np.clip(x, 0, W-1))
+        gx = _grad2d_x(S); gy = _grad2d_y(S)
+        th = np.arctan2(gy[y, x], gx[y, x]) + np.pi * 0.5
+        # normalize to (-π, π]
+        th = (th + np.pi) % (2*np.pi) - np.pi
+        return float(th)
     
     
+    def _nms_peaks(A: np.ndarray, k: int, radius: int) -> List[Tuple[int,int,float]]:
+        """
+        Simple non-max suppression on map A (H,W):
+        returns up to k peaks as [(y,x,val), ...] sorted by val desc.
+        """
+        H, W = A.shape
+        taken = np.zeros_like(A, dtype=bool)
+        peaks = []
+        flat_idx = np.argsort(A.ravel())[::-1]  # high→low
+        r = int(max(1, radius))
+        for idx in flat_idx:
+            if len(peaks) >= int(max(1, k)): break
+            y, x = divmod(int(idx), W)
+            if taken[y, x]: continue
+            v = float(A[y, x])
+            if v <= 0.0: break
+            peaks.append((y, x, v))
+            y0 = max(0, y - r); y1 = min(H, y + r + 1)
+            x0 = max(0, x - r); x1 = min(W, x + r + 1)
+            taken[y0:y1, x0:x1] = True
+        return peaks
+
+    def _spawn_or_update_from_connections(self, S: np.ndarray):
+        """
+        Deterministically place/adjust attractors from current *connection strength*.
+        No randomness, no probabilities.
     
-    def _propagate_if_strong(self):
-        if self.ndim != 2 or not self.attractors:
+        Steps:
+          1) Build strength map (encoding × |kappa| with mild |∇S| boost).
+          2) Pick top-K local maxima with NMS.
+          3) For each peak:
+             - If a live attractor is close, *move/retune* it to the peak.
+             - Else, *spawn* a new one (if energy available).
+          4) Cull by normal maintain/decay (handled elsewhere).
+        """
+        if self.ndim != 2: 
             return
         H, W = self.shape
-        for k in list(self.attractors):
-            if k.amp < 5.0 * self.attr_amp_min:
-                continue
-            y, x = k.pos
-            nbrs = [(y-1,x),(y+1,x),(y,x-1),(y,x+1)]
-            for ny, nx in nbrs:
-                if 0 <= ny < H and 0 <= nx < W and self.F[ny, nx] >= self.attr_spawn_energy and self.rng.random() < 0.25:
-                    self.F[ny, nx] -= self.attr_spawn_energy
-                    self.B[ny, nx] += self.work_to_dissipation_fraction * self.attr_spawn_energy
-                    r_par  = float(np.clip(k.r_par  + self.rng.normal(0, 0.2), *self.r_par_rng))
-                    r_perp = float(np.clip(k.r_perp + self.rng.normal(0, 0.2), *self.r_perp_rng))
-                    theta  = float((k.theta + self.rng.normal(0, self.theta_jitter) + np.pi) % (2*np.pi) - np.pi)
-                    amp    = float(self.attr_amp_init)
     
-                    # NEW: children adopt local encoding-driven noise
-                    sig_theta, sig_signal = self._noise_from_encoding(ny, nx)
+        # 1) strength map in [0,1]
+        _, _, strength = self._conn_strength_maps(S)
     
-                    kk = Attractor(self._next_attr_id, (ny, nx), r_par, r_perp, theta,
-                                   amp, self.attr_maint_rate, self.attr_decay,
-                                   sigma_theta=float(sig_theta), sigma_signal=float(sig_signal))
-                    self._next_attr_id += 1
-                    self.attractors.append(kk)
-                    if len(self.attractors) >= self.attr_max:
-                        return
+        # 2) top-K peaks (K = capacity left, with a small cap per tick)
+        cap = int(max(0, self.attr_max - len(self.attractors)))
+        if cap <= 0:
+            return
+        per_tick_cap = max(1, min(16, cap))  # don’t flood per step
+        # detection radius ~ typical parallel radius
+        r_par_mean = 0.5 * (float(self.r_par_rng[0]) + float(self.r_par_rng[1]))
+        detect_r = int(max(2, round(r_par_mean)))
+        peaks = _nms_peaks(strength, k=per_tick_cap, radius=detect_r)
+        if not peaks:
+            return
+    
+        # distance thresholds
+        stick_r = max(1.0, 0.75 * r_par_mean)   # when "same" attractor
+        new_amp = float(self.attr_amp_init)
+    
+        # convenience grads
+        gx = _grad2d_x(S); gy = _grad2d_y(S)
+    
+        for (y, x, s) in peaks:
+            # 3a) find nearest existing attractor
+            best_id = -1
+            best_d2 = 1e18
+            for i, a in enumerate(self.attractors):
+                dy = float(a.pos[0] - y); dx = float(a.pos[1] - x)
+                d2 = dy*dy + dx*dx
+                if d2 < best_d2:
+                    best_d2 = d2; best_id = i
+    
+            if best_id >= 0 and best_d2 <= stick_r * stick_r:
+                # Move/retune existing attractor toward the peak.
+                a = self.attractors[best_id]
+                a.pos = (int(y), int(x))
+                # orientation from local tangent
+                th = np.arctan2(gy[y, x], gx[y, x]) + np.pi * 0.5
+                a.theta = float((th + np.pi) % (2*np.pi) - np.pi)
+                # radii scaled by local encoding
+                enc_loc = float(self._encoding_at(y, x))
+                a.r_par  = float(np.clip(a.r_par  * (1.0 + self.enc_radius_par_mult  * enc_loc),
+                                         self.r_par_rng[0],  self.r_par_rng[1]))
+                a.r_perp = float(np.clip(a.r_perp * (1.0 + self.enc_radius_perp_mult * enc_loc),
+                                         self.r_perp_rng[0], self.r_perp_rng[1]))
+                # amplitude nudged toward connection strength
+                a.amp = float(np.clip(0.8 * a.amp + 0.2 * (new_amp * (1.0 + self.enc_amp_mult * enc_loc) * s),
+                                      0.0, self.attr_amp_max))
+                # retune noise from strength/encoding
+                sig_th, sig_sig = self._noise_from_encoding(y, x)
+                a.sigma_theta  = float(sig_th)
+                a.sigma_signal = float(sig_sig)
+            else:
+                # 3b) spawn new at the peak (energy-gated)
+                if self.F[y, x] < self.attr_spawn_energy:
+                    continue
+                self.F[y, x] -= self.attr_spawn_energy
+                self.B[y, x] += self.work_to_dissipation_fraction * self.attr_spawn_energy
+    
+                # geometry from ranges, then scaled by encoding at (y,x)
+                enc_loc = float(self._encoding_at(y, x))
+                r_par  = float(self.rng.uniform(*self.r_par_rng))
+                r_perp = float(self.rng.uniform(*self.r_perp_rng))
+                r_par  *= (1.0 + self.enc_radius_par_mult  * enc_loc)
+                r_perp *= (1.0 + self.enc_radius_perp_mult * enc_loc)
+                # orientation = local tangent
+                th = _local_tangent_theta(S, y, x)
+                # amplitude scales with connection strength and encoding
+                amp = float(new_amp * (1.0 + self.enc_amp_mult * enc_loc) * s)
+                # local noise
+                sig_th, sig_sig = self._noise_from_encoding(y, x)
+    
+                k = Attractor(
+                    self._next_attr_id, (int(y), int(x)),
+                    float(r_par), float(r_perp), float(th),
+                    float(np.clip(amp, 0.0, self.attr_amp_max)),
+                    self.attr_maint_rate, self.attr_decay,
+                    sigma_theta=float(sig_th), sigma_signal=float(sig_sig)
+                )
+                self._next_attr_id += 1
+                self.attractors.append(k)
+                if len(self.attractors) >= self.attr_max:
+                    break
+
 
 # ============================================================
 # Stepping (public API used by Engine)
