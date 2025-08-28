@@ -4,6 +4,8 @@ import numpy as np
 from typing import Dict, Any, Tuple
 
 from . import physics
+from . import env as envmod
+from .config import FieldCfg
 from .metrics import collect, format_for_log  # optional logging
 
 
@@ -36,10 +38,10 @@ def _config_to_dict(cfg_obj: Any) -> Dict[str, Any]:
 # ---------- Engine ----------
 class Engine:
     """
-    Full‑grid mode:
-    - Substrate S is sized to the environment grid (env.height × env.length)
-    - Physics runs on the entire grid (no resampling, no cropping)
-    - UI receives the native environment for plotting
+    Full-grid mode:
+    - Substrate S matches the environment grid (env.height × env.length)
+    - Environment is generated once with env.build_env (periodic, torus)
+    - Physics runs on the entire grid (no resampling)
     """
     def __init__(self, cfg: Any):
         # normalize config
@@ -47,19 +49,30 @@ class Engine:
         self.cfg = cfg
         self.rng = np.random.default_rng(int(cfg.get("seed", 0)))
 
-        # environment config
-        self.env_cfg = cfg.get("env", {}) if isinstance(cfg.get("env", {}), dict) else {}
-        self.env_H = int(self.env_cfg.get("height", int(cfg.get("space", 64))))
-        self.env_W = int(self.env_cfg.get("length", int(cfg.get("space", 64))))
-        self.env_sigma  = float(self.env_cfg.get("noise_sigma", 0.0))
-        self.env_sources = list(self.env_cfg.get("sources", []))
-
         # frames: prefer top-level; fall back to env.frames; default 2000
-        self.frames = int(cfg.get("frames", self.env_cfg.get("frames", 2000)))
-        self.env_frames = self.frames  # keep env in lockstep with sim
+        self.frames = int(cfg.get("frames", int(cfg.get("env", {}).get("frames", 2000))))
+
+        # environment config (prepare FieldCfg with sane fallbacks)
+        env_dict = dict(cfg.get("env", {})) if isinstance(cfg.get("env", {}), dict) else {}
+        # default spatial size falls back to top-level "space"
+        space_default = int(cfg.get("space", 64))
+        env_dict.setdefault("length", space_default)
+        env_dict.setdefault("height", space_default)
+        env_dict.setdefault("frames", self.frames)
+        env_dict.setdefault("noise_sigma", float(env_dict.get("noise_sigma", 0.0)))
+        env_dict.setdefault("sources", list(env_dict.get("sources", [])))
+
+        # build periodic environment timeline E_seq: (T, H, W) or (T, X)
+        E_seq = envmod.build_env(FieldCfg(**env_dict), self.rng)
+        # ensure 2D spatial substrate (H, W)
+        if E_seq.ndim == 2:
+            # (T, X) -> treat as (T, 1, X) and use a 1×X substrate
+            E_seq = E_seq[:, None, :]
+        self.E_seq = E_seq
+        self.env_frames, self.env_H, self.env_W = self.E_seq.shape[0], self.E_seq.shape[1], self.E_seq.shape[2]
 
         # classic knobs
-        self.space    = int(cfg.get("space", 64))  # kept for UI/back‑compat
+        self.space    = int(cfg.get("space", max(self.env_H, self.env_W)))  # kept for UI/back-compat
         self.k_flux   = float(cfg.get("k_flux", 0.08))
         self.k_motor  = float(cfg.get("k_motor", 0.20))
         self.diffuse  = float(cfg.get("diffuse", 0.05))
@@ -67,67 +80,21 @@ class Engine:
         self.band     = int(cfg.get("band", 3))
         self.bc       = str(cfg.get("bc", "reflect"))
 
-        # physics & fuka3 blocks (pass‑through to step_physics)
+        # physics & fuka3 blocks (pass-through to step_physics)
         self.physics_cfg = dict(cfg.get("physics", {}))
         self.fuka3_cfg   = dict(cfg.get("fuka3", {}))
 
-        # substrate S matches the environment (FULL‑GRID)
+        # substrate S matches the environment (FULL-GRID)
         self.S = np.zeros((self.env_H, self.env_W), dtype=float)
 
         # runtime counter
         self.frame_idx = 0
 
-    # ---------- Environment synthesis (native H×W) ----------
-    def _env_field(self, t: int) -> np.ndarray:
-        H, W = self.env_H, self.env_W
-        E = np.zeros((H, W), dtype=float)
-
-        def add_peak_2d(amp: float, cx: float, cy: float, wx: float, wy: float):
-            y, x = np.indices((H, W))
-            E[:] += amp * np.exp(
-                -((x - cx) ** 2) / (2.0 * wx * wx) - ((y - cy) ** 2) / (2.0 * wy * wy)
-            )
-
-        for src in self.env_sources:
-            kind = src.get("kind", "moving_peak_2d")
-
-            if kind == "moving_peak_2d":
-                amp = float(src.get("amp", 1.0))
-                vx  = float(src.get("speed_x", 0.0))
-                vy  = float(src.get("speed_y", 0.0))
-                wx  = max(1e-6, float(src.get("width_x", 6.0)))   # guard zero/neg
-                wy  = max(1e-6, float(src.get("width_y", 6.0)))
-                sx  = float(src.get("start_x", W // 2))
-                sy  = float(src.get("start_y", H // 2))
-                cx  = (sx + vx * t) % W
-                cy  = (sy + vy * t) % H
-                add_peak_2d(amp, cx, cy, wx, wy)
-
-            elif kind == "moving_peak":
-                # 1D strip peak centered along y (Gaussian in x and y)
-                amp = float(src.get("amp", 0.6))
-                v   = float(src.get("speed", 0.02))
-                w   = max(1e-6, float(src.get("width", 5.0)))
-                start = float(src.get("start", W // 2))
-                y_center = src.get("y_center", "mid")
-                wy = max(1e-6, float(src.get("width_y", 18.0)))
-                cx = (start + v * t) % W
-                cy = H // 2 if y_center == "mid" else float(y_center)
-                y, x = np.indices((H, W))
-                E += amp * np.exp(-((x - cx) ** 2) / (2.0 * w * w)) * np.exp(
-                    -((y - cy) ** 2) / (2.0 * wy * wy)
-                )
-
-            # (Other kinds could be added here without changing API)
-
-        if self.env_sigma > 0.0:
-            E += self.env_sigma * self.rng.standard_normal(size=E.shape)
-
-        return E  # native env (no resample)
-
     # ---------- One simulation step ----------
     def step(self) -> Tuple[np.ndarray, float, np.ndarray]:
-        E = self._env_field(self.frame_idx)  # native H×W
+        # pick the current environment frame (periodic wrap)
+        t = self.frame_idx % self.env_frames
+        E = self.E_seq[t]
 
         # Physics on FULL GRID (S and E have the same shape)
         S_next, flux = physics.step_physics(
