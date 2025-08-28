@@ -182,7 +182,7 @@
       "freq_jitter": 0.08,
       "noise_gain": 0.40,
       "edge_kind": "both",
-      "edge_thr": 0.80,
+      "edge_thr": 0.60,
       "radius_boost": 1.25,
       "energy_per_unit": 0.0
     }
