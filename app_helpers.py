@@ -527,16 +527,27 @@ def draw_3d_connections_over_time(
                         showlegend=True
                     ))
 
-            # tracks
+            # --- draw short tracks ONLY when an attractor persists across adjacent frames ---
             Xt, Yt, Zt = [], [], []
+            consecutive_gap = 1  # connect only if frames are consecutive (<= 1 apart)
+
             for _id, seq in tracks.items():
+                # seq contains tuples: (t, y, x)
                 seq.sort(key=lambda p: p[0])
                 for i in range(len(seq) - 1):
                     t0, y0, x0 = seq[i]
                     t1, y1, x1 = seq[i + 1]
-                    Xt += [x0, x1, None]
-                    Yt += [y0, y1, None]
-                    Zt += [t0, t1, None]
+
+                    # keep only segments inside our visible time range
+                    if (t0 < t_lo or t0 > t_hi) or (t1 < t_lo or t1 > t_hi):
+                        continue
+
+                    # *** Option B rule: only connect if the same id appears in adjacent frames ***
+                    if (t1 - t0) <= consecutive_gap:
+                        Xt += [x0, x1, None]
+                        Yt += [y0, y1, None]
+                        Zt += [t0, t1, None]
+
             if Xt:
                 fig.add_trace(go.Scatter3d(
                     x=Xt, y=Yt, z=Zt,
