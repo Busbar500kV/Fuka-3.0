@@ -908,19 +908,12 @@ def step_physics(
 
     # ---------------- Attractors lifecycle ----------------
     if st.ndim == 2:
-        # If you've replaced _maybe_spawn with the encoding-aware version, this will use it.
-        # If not, it will use the classic one — signature unchanged.
-        try:
-            st._maybe_spawn(E)
-        except Exception:
-            # fail-soft: no spawn this tick
-            pass
-
-        try:
-            st._maintain_and_decay()
-        except Exception:
-            # fail-soft: keep existing attractors as-is
-            pass
+        # update encoding first (uses current S)
+        st._update_encoding_maps(S)
+        # deterministic spawn/update from connections (uses current S)
+        st._spawn_or_update_from_connections(S)
+        # maintain/decay (energy-gated)
+        st._maintain_and_decay()
 
     # ================== Denoising / learning (with attractor bias) ==================
     new_S = S.copy()
