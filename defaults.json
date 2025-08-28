@@ -72,18 +72,7 @@
   "fuka3": {
     "ema": {
       "tau_var_fast": 4,
-      "tau_var_slow": 32,
-      "tau_muE": 8
-    },
-    "tiles": {
-      "tile_size": 8
-    },
-    "bank": {
-      "alpha_uptake": 1.0,
-      "cost_work_coeff": 1.0,
-      "leak": 0.02,
-      "Bmin": 0.0,
-      "sigma_B": 0.25
+      "tau_var_slow": 32
     },
 
     "energy": {
@@ -105,14 +94,11 @@
         "amplitude_range": [0.05, 0.15],
         "frequency_range": [0.05, 0.25],
         "phase_range": [0.0, 6.283185307179586],
-        "curvature_range": [0.0, 0.5],
-        "plasticity_range": [0.01, 0.05]
+        "curvature_range": [0.0, 0.5]
       },
       "learning": {
         "eta": 0.18,
-        "entropy_window": 24,
-        "entropy_kind": "variance",
-        "flux_limit": 0.20
+        "entropy_window": 24
       }
     },
 
@@ -123,9 +109,7 @@
     },
 
     "attractors": {
-      "spawn_prob_base": 0.010,
       "spawn_trials": 32,
-      "spawn_bias_env_weight": 0.6,
       "spawn_energy": 0.05,
       "amplitude_init": 0.12,
       "amplitude_min": 0.004,
@@ -135,29 +119,13 @@
       "decay_rate": 0.006,
       "shape": {
         "r_parallel_range": [2.0, 6.0],
-        "r_perp_range": [1.0, 3.0],
-        "theta_jitter": 0.3
-      },
-      "influence": {
-        "c_theta_rho": 0.7,
-        "c_theta_H": 1.4,
-        "c_alpha": 0.35,
-        "c_beta": 0.35,
-        "birth_multiplier_kappa": 0.8
+        "r_perp_range": [1.0, 3.0]
       },
       "encoding": {
         "beta": 0.10,
-        "env_weight": 0.40,
-        "spawn_env_coeff": 0.80,
-        "spawn_enc_coeff": 1.60,
         "radius_par_mult": 0.80,
         "radius_perp_mult": 0.40,
-        "amp_mult": 0.50,
-        "jitter_reduction": 0.70,
-        "signal_noise_base": 0.50,
-        "signal_noise_reduction": 0.70,
-        "influence_enc_gain": 2.0,
-        "param_damp_gain": 1.5
+        "amp_mult": 0.50
       },
       "noise": {
         "sigma_signal_max": 0.60,
@@ -167,11 +135,6 @@
         "encoding_gain": 1.0
       },
       "max_count": 256
-    },
-
-    "integration": {
-      "sigma_theta": 0.5,
-      "fitness_efficiency_mix": 1.0
     },
 
     "stimulation": {
