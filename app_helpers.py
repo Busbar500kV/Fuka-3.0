@@ -304,7 +304,7 @@ def draw_3d_connections_over_time(
     ph,
     E_stack: np.ndarray,
     S_stack: np.ndarray,
-    thr_env: float,
+    thr_env: float,               # kept for signature compatibility (unused)
     base_win: int,
     eval_win: int,
     corr_thr: float,
@@ -313,35 +313,34 @@ def draw_3d_connections_over_time(
     stride_t: int,
     max_edges_total: int,
     attr_overlay: bool,
-    attr_scale: float,
+    attr_scale: float,            # kept for signature compatibility (unused)
     attr_alpha: float,
-    get_attractor_items_fn,   # kept for compatibility (unused when attr_history provided)
-    new_key_fn,               # kept for compatibility
+    get_attractor_items_fn,       # kept for compatibility (unused when attr_history provided)
+    new_key_fn,                   # kept for compatibility
     *,
     camera: dict | None = None,
     uirevision: str = "conn3d",
-    attr_history: list | None = None,   # per-frame attractor snapshots (full history)
-    debug_show_midpoints: bool = True,
+    attr_history: list | None = None,   # full history allowed
+    debug_show_midpoints: bool = False, # ignored in this slim view
 ):
     """
-    Draw Env dots + time-layered substrate connections in 3D.
+    SLIM VIEW: draw ONLY (1) substrate connections and (2) attractors as dots.
+    Attractor color encodes *noise*:
+      - If 'encoding' (or 'enc') available in items: noise = 1 - encoding (clipped 0..1).
+      - Else, use robustly-normalized 'sigma_signal' (or 'sigma') to 0..1 via 5–95 pct.
 
-    If `attr_history` is provided as [{"t": int, "items":[{id, pos(y,x), amp, ...}]}],
-    we draw those attractors across the whole run (no trimming) and color by encoding.
-    Returns a dict with polyline arrays for optional debugging.
+    We keep history intact but cap payload sizes with uniform sampling.
     """
+    # -------- caps to keep payload small --------
+    CONN_TRIPLETS_CAP  = int(max_edges_total)             # one line segment = 3 entries [x0,x1,None]
+    ATTR_POINTS_CAP    = 40_000                           # total attractor dots rendered
+
     fig = go.Figure()
 
-    # -------- Env points (sparse) --------
-    _draw_3d_env_points(fig, E_stack, thr=float(thr_env), portion=0.30, cap_pts=150000)
-
-    # -------- Time span (all frames by default) --------
+    # ====================== Connections ======================
     T, H, W = S_stack.shape
     t_lo, t_hi = 0, T - 1
-
-    # -------- Substrate connections over time (no overlay dependency) --------
     xs_all, ys_all, zs_all = [], [], []
-    budget = int(max_edges_total)
 
     t_start = max(base_win + eval_win - 1, t_lo)
     for t in range(t_start, t_hi + 1, max(1, int(stride_t))):
@@ -350,94 +349,34 @@ def draw_3d_connections_over_time(
             base_win=int(base_win), eval_win=int(eval_win),
             corr_thr=float(corr_thr), dvar_thr=float(dvar_thr), energy_q=float(energy_q)
         )
-        if xs.size == 0:
-            continue
+        if xs.size:
+            xs_all.append(xs); ys_all.append(ys); zs_all.append(zs)
 
-        # budget guard (keep full triplets [x0,x1,None])
-        if (len(xs_all) + len(xs)) > budget:
-            keep = max(0, budget - len(xs_all))
-            if keep <= 0:
-                break
-            triplets = len(xs) // 3
-            if triplets > 0:
-                idx = np.random.choice(triplets, size=max(1, keep // 3), replace=False)
-                xs_t, ys_t, zs_t = [], [], []
-                for k in idx:
-                    i = 3 * k
-                    xs_t += [xs[i], xs[i+1], None]
-                    ys_t += [ys[i], ys[i+1], None]
-                    zs_t += [zs[i], zs[i+1], None]
-                xs = np.array(xs_t, dtype=object)
-                ys = np.array(ys_t, dtype=object)
-                zs = np.array(zs_t, dtype=object)
-
-        xs_all.append(xs); ys_all.append(ys); zs_all.append(zs)
-
-    conn_x, conn_y, conn_z = [], [], []
-    total_segments = 0
-    near_xy = 0
-    near_yx = 0
-    dlist_xy = []
-    dlist_yx = []
-
+    conn_x = conn_y = conn_z = []
     if xs_all:
         xs_all = np.concatenate(xs_all)
         ys_all = np.concatenate(ys_all)
         zs_all = np.concatenate(zs_all)
 
+        # sample by complete triplets
+        triplets = len(xs_all) // 3
+        if triplets > CONN_TRIPLETS_CAP:
+            sel = np.random.choice(triplets, size=CONN_TRIPLETS_CAP, replace=False)
+            sel.sort()
+            x_tmp, y_tmp, z_tmp = [], [], []
+            for k in sel:
+                i = 3 * k
+                x_tmp += [xs_all[i], xs_all[i+1], None]
+                y_tmp += [ys_all[i], ys_all[i+1], None]
+                z_tmp += [zs_all[i], zs_all[i+1], None]
+            xs_all = np.array(x_tmp, dtype=object)
+            ys_all = np.array(y_tmp, dtype=object)
+            zs_all = np.array(z_tmp, dtype=object)
+
         conn_x = xs_all.tolist()
         conn_y = ys_all.tolist()
         conn_z = zs_all.tolist()
 
-        # --- collect midpoints and basic near stats against attractors (if provided) ---
-        attr_pts_by_t = {}
-        if attr_overlay and isinstance(attr_history, list):
-            for frame in attr_history:
-                t = int(frame.get("t", 0))
-                pts = attr_pts_by_t.setdefault(t, [])
-                for it in frame.get("items", []):
-                    y, x = int(it.get("pos", (0, 0))[0]), int(it.get("pos", (0, 0))[1])
-                    pts.append((float(x), float(y)))  # store as (x,y)
-
-        mid_x, mid_y, mid_z = [], [], []
-        radius_px = 3.0
-        r2 = radius_px * radius_px
-        n = len(xs_all)
-        i = 0
-        while i + 2 < n:
-            x0, x1, xN = xs_all[i], xs_all[i+1], xs_all[i+2]
-            y0, y1, yN = ys_all[i], ys_all[i+1], ys_all[i+2]
-            z0, z1, zN = zs_all[i], zs_all[i+1], zs_all[i+2]
-            i += 3
-
-            if x0 is None or x1 is None or xN is not None:  continue
-            if y0 is None or y1 is None or yN is not None:  continue
-            if z0 is None or z1 is None or zN is not None:  continue
-            if z0 != z1:                                    continue
-
-            total_segments += 1
-            t = int(z0)
-            pts_xy = attr_pts_by_t.get(t, [])
-
-            xm = 0.5 * (float(x0) + float(x1))
-            ym = 0.5 * (float(y0) + float(y1))
-
-            if debug_show_midpoints:
-                mid_x.append(xm); mid_y.append(ym); mid_z.append(t)
-
-            if pts_xy:
-                d2_xy = min((xm - ax)**2 + (ym - ay)**2 for (ax, ay) in pts_xy)
-                dlist_xy.append(d2_xy**0.5)
-                if d2_xy <= r2:
-                    near_xy += 1
-
-                # swap mapping check
-                d2_yx = min((ym - ax)**2 + (xm - ay)**2 for (ax, ay) in pts_xy)
-                dlist_yx.append(d2_yx**0.5)
-                if d2_yx <= r2:
-                    near_yx += 1
-
-        # plot the connections
         fig.add_trace(go.Scatter3d(
             x=xs_all, y=ys_all, z=zs_all,
             mode="lines",
@@ -445,170 +384,109 @@ def draw_3d_connections_over_time(
             name="Substrate connections"
         ))
 
-        if debug_show_midpoints and mid_x:
-            fig.add_trace(go.Scatter3d(
-                x=np.array(mid_x), y=np.array(mid_y), z=np.array(mid_z),
-                mode="markers",
-                marker=dict(size=2, opacity=0.35),
-                name="Conn midpoints"
-            ))
-
-    # -------- Attractors over time (no trimming) --------
+    # ====================== Attractors as dots ======================
     if attr_overlay:
-        enc_thr = 0.5  # threshold to separate Structured vs Noisy categories (by encoding)
+        Xp, Yp, Zp, Sz, Noise = [], [], [], [], []
+
+        def _finalize_noise(enc_list, sig_list):
+            """Return a list of 0..1 noise values using encoding if present, else sigma."""
+            if any(np.isfinite(enc_list)):
+                # use 1 - encoding
+                e = np.array([v if np.isfinite(v) else np.nan for v in enc_list], dtype=float)
+                e = np.clip(e, 0.0, 1.0)
+                n = 1.0 - e
+                # replace NaNs with median
+                med = float(np.nanmedian(n)) if np.isfinite(np.nanmedian(n)) else 0.5
+                n = np.where(np.isfinite(n), n, med)
+                return n.tolist()
+            # else robust-normalize sigma
+            s = np.array([v if np.isfinite(v) else np.nan for v in sig_list], dtype=float)
+            if np.all(~np.isfinite(s)):
+                return [0.5] * len(sig_list)
+            lo = float(np.nanpercentile(s, 5))
+            hi = float(np.nanpercentile(s, 95))
+            if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+                lo, hi = float(np.nanmin(s)), float(np.nanmax(s))
+            n = (s - lo) / (max(1e-12, hi - lo))
+            n = np.clip(n, 0.0, 1.0)
+            med = float(np.nanmedian(n)) if np.isfinite(np.nanmedian(n)) else 0.5
+            n = np.where(np.isfinite(n), n, med)
+            return n.tolist()
+
+        enc_buf, sig_buf = [], []
 
         if attr_history and isinstance(attr_history, list):
-            # points across the entire run
-            Xp, Yp, Zp, Sz = [], [], [], []
-            Enc, Sig, Ids, Amp = [], [], [], []
-            from collections import defaultdict
-            tracks = defaultdict(list)  # id -> [(t,y,x)]
-
             for frame in attr_history:
                 t = int(frame.get("t", 0))
                 for it in frame.get("items", []):
                     y, x = int(it.get("pos", (0, 0))[0]), int(it.get("pos", (0, 0))[1])
                     amp   = float(it.get("amp", 0.0))
-                    enc   = float(it.get("encoding", it.get("enc", 0.0)))
+                    enc   = float(it.get("encoding", it.get("enc", np.nan)))
                     sig   = float(it.get("sigma_signal", it.get("sigma", np.nan)))
-                    _id   = int(it.get("id", -1))
 
                     Xp.append(x); Yp.append(y); Zp.append(t)
                     Sz.append(2.0 + 6.0 * max(0.0, amp))
-                    Enc.append(float(np.clip(enc, 0.0, 1.0)))
-                    Sig.append(sig)
-                    Ids.append(_id); Amp.append(amp)
-
-                    tracks[_id].append((t, y, x))
+                    enc_buf.append(enc); sig_buf.append(sig)
 
             if Xp:
-                # continuous color by encoding
+                Noise = _finalize_noise(enc_buf, sig_buf)
+
+                # global cap (uniform sample)
+                N = len(Xp)
+                if N > ATTR_POINTS_CAP:
+                    idx = np.random.choice(N, size=ATTR_POINTS_CAP, replace=False)
+                    Xp = [Xp[i] for i in idx]; Yp = [Yp[i] for i in idx]; Zp = [Zp[i] for i in idx]
+                    Sz = [Sz[i] for i in idx];  Noise = [Noise[i] for i in idx]
+
                 fig.add_trace(go.Scatter3d(
                     x=Xp, y=Yp, z=Zp,
                     mode="markers",
                     marker=dict(
                         size=Sz,
-                        opacity=max(0.15, float(attr_alpha)*0.75),
-                        color=Enc, colorscale="Viridis", cmin=0.0, cmax=1.0,
-                        colorbar=dict(title="encoding", x=1.16, y=0.5, len=0.70, thickness=12)
+                        opacity=float(attr_alpha),
+                        color=Noise, colorscale="Viridis", cmin=0.0, cmax=1.0,
+                        colorbar=dict(title="noise", x=1.14, y=0.5, len=0.70, thickness=12)
                     ),
-                    hovertemplate=(
-                        "t=%{z}<br>x=%{x}, y=%{y}"
-                        "<br>id=%{customdata[0]} amp=%{customdata[1]:.3f}"
-                        "<br>enc=%{customdata[2]:.2f} σ_sig=%{customdata[3]:.2f}<extra></extra>"
-                    ),
-                    customdata=np.column_stack([Ids, Amp, Enc, Sig]),
-                    name="Attractors (pts over time)"
-                ))
-
-                # legend categories: Structured vs Noisy by encoding threshold
-                cat_struct_x, cat_struct_y, cat_struct_z = [], [], []
-                cat_noisy_x,  cat_noisy_y,  cat_noisy_z  = [], [], []
-                for x, y, z, enc in zip(Xp, Yp, Zp, Enc):
-                    if enc >= enc_thr:
-                        cat_struct_x.append(x); cat_struct_y.append(y); cat_struct_z.append(z)
-                    else:
-                        cat_noisy_x.append(x);  cat_noisy_y.append(y);  cat_noisy_z.append(z)
-
-                if cat_struct_x:
-                    fig.add_trace(go.Scatter3d(
-                        x=cat_struct_x, y=cat_struct_y, z=cat_struct_z,
-                        mode="markers",
-                        marker=dict(size=3, opacity=0.35),
-                        name=f"Structured (enc ≥ {enc_thr:.2f})",
-                        showlegend=True
-                    ))
-                if cat_noisy_x:
-                    fig.add_trace(go.Scatter3d(
-                        x=cat_noisy_x, y=cat_noisy_y, z=cat_noisy_z,
-                        mode="markers",
-                        marker=dict(size=3, opacity=0.20),
-                        name=f"Noisy (enc < {enc_thr:.2f})",
-                        showlegend=True
-                    ))
-
-            # --- draw short tracks ONLY when an attractor persists across adjacent frames ---
-            Xt, Yt, Zt = [], [], []
-            consecutive_gap = 1  # connect only if frames are consecutive (<= 1 apart)
-
-            for _id, seq in tracks.items():
-                # seq contains tuples: (t, y, x)
-                seq.sort(key=lambda p: p[0])
-                for i in range(len(seq) - 1):
-                    t0, y0, x0 = seq[i]
-                    t1, y1, x1 = seq[i + 1]
-
-                    # keep only segments inside our visible time range
-                    if (t0 < t_lo or t0 > t_hi) or (t1 < t_lo or t1 > t_hi):
-                        continue
-
-                    # *** Option B rule: only connect if the same id appears in adjacent frames ***
-                    if (t1 - t0) <= consecutive_gap:
-                        Xt += [x0, x1, None]
-                        Yt += [y0, y1, None]
-                        Zt += [t0, t1, None]
-
-            if Xt:
-                fig.add_trace(go.Scatter3d(
-                    x=Xt, y=Yt, z=Zt,
-                    mode="lines",
-                    line=dict(width=4),
-                    opacity=float(attr_alpha),
-                    name="Attractor tracks"
+                    name="Attractors (noise-colored)"
                 ))
 
         else:
-            # fallback: single-snapshot API (kept for compatibility)
+            # single-snapshot fallback
             try:
                 items = get_attractor_items_fn()
-                z0 = T - 1
-                Xs, Ys, Zs = [], [], []
-                Cc = []  # color by encoding if available
-                for it in items:
-                    pos = it.get("pos", (0, 0))
-                    y0, x0 = int(pos[0]), int(pos[1])
-                    theta = float(it.get("theta", 0.0))
-                    r_par = float(it.get("r_par", 1.0))
-                    amp   = float(it.get("amp", 0.5))
-                    enc   = float(it.get("encoding", 0.0))
-                    L = max(0.2, r_par) * max(0.2, amp) * float(attr_scale)
-                    dx = L * np.cos(theta); dy = L * np.sin(theta)
-                    Xs += [x0 - dx, x0 + dx, None]
-                    Ys += [y0 - dy, y0 + dy, None]
-                    Zs += [z0,      z0,      None]
-                    Cc += [enc, enc, None]
-
-                if Xs:
-                    fig.add_trace(go.Scatter3d(
-                        x=np.array(Xs, dtype=object), y=np.array(Ys, dtype=object), z=np.array(Zs, dtype=object),
-                        mode="lines",
-                        line=dict(width=4),
-                        opacity=float(attr_alpha),
-                        marker=dict(color=Cc, colorscale="Viridis", cmin=0.0, cmax=1.0),
-                        name="Attractors (final)"
-                    ))
+                if items:
+                    enc_buf, sig_buf = [], []
+                    for it in items:
+                        pos = it.get("pos", (0, 0)); y0, x0 = int(pos[0]), int(pos[1])
+                        amp = float(it.get("amp", 0.0))
+                        enc = float(it.get("encoding", it.get("enc", np.nan)))
+                        sig = float(it.get("sigma_signal", it.get("sigma", np.nan)))
+                        Xp.append(x0); Yp.append(y0); Zp.append(len(S_stack) - 1)
+                        Sz.append(2.0 + 6.0 * max(0.0, amp))
+                        enc_buf.append(enc); sig_buf.append(sig)
+                    if Xp:
+                        Noise = _finalize_noise(enc_buf, sig_buf)
+                        N = len(Xp)
+                        if N > ATTR_POINTS_CAP:
+                            idx = np.random.choice(N, size=ATTR_POINTS_CAP, replace=False)
+                            Xp = [Xp[i] for i in idx]; Yp = [Yp[i] for i in idx]; Zp = [Zp[i] for i in idx]
+                            Sz = [Sz[i] for i in idx];  Noise = [Noise[i] for i in idx]
+                        fig.add_trace(go.Scatter3d(
+                            x=Xp, y=Yp, z=Zp,
+                            mode="markers",
+                            marker=dict(
+                                size=Sz, opacity=float(attr_alpha),
+                                color=Noise, colorscale="Viridis", cmin=0.0, cmax=1.0,
+                                colorbar=dict(title="noise", x=1.14, y=0.5, len=0.70, thickness=12)
+                            ),
+                            name="Attractors (noise-colored)"
+                        ))
             except Exception as e:
                 st.info(f"Attractor overlay unavailable ({e}). Continue without it.)")
 
-    # -------- Title & diagnostics --------
-    def _stats(vals):
-        if not vals:
-            return {"min": float("inf"), "median": float("inf")}
-        a = np.asarray(vals, dtype=float)
-        return {"min": float(np.min(a)), "median": float(np.median(a))}
-
-    stats_xy = _stats(dlist_xy)
-    stats_yx = _stats(dlist_yx)
-
-    title_txt = "3-D connections"
-    if total_segments > 0:
-        r_xy = 100.0 * near_xy / float(total_segments)
-        r_yx = 100.0 * near_yx / float(total_segments)
-        title_txt += (f" — near@XY: {near_xy}/{total_segments} ({r_xy:.1f}%), "
-                      f"near@YX: {near_yx}/{total_segments} ({r_yx:.1f}%)")
-
+    # ====================== Layout ======================
     fig.update_layout(
-        title=title_txt,
+        title="3-D connections & attractors",
         uirevision=uirevision,
         scene=dict(
             camera=(camera or {}),
@@ -617,9 +495,11 @@ def draw_3d_connections_over_time(
         ),
         template="plotly_dark",
         showlegend=True,
+        legend=dict(x=0.01, y=0.99, bgcolor="rgba(0,0,0,0)"),
         height=640,
         margin=dict(l=0, r=0, t=40, b=0),
     )
+
     ph.plotly_chart(
         fig,
         use_container_width=True,
@@ -629,29 +509,12 @@ def draw_3d_connections_over_time(
             scrollZoom=True,
             displaylogo=False,
             doubleClick="false",
-            modeBarButtonsToRemove=[
-                "resetCameraDefault3d", "resetCameraLastSave3d",
-                "autoScale", "toImage"
-            ],
+            modeBarButtonsToRemove=["resetCameraDefault3d","resetCameraLastSave3d","autoScale","toImage"],
         ),
     )
-
-    # quick caption with distance diagnostics
-    try:
-        st.caption(
-            f"Distance stats — mapping XY: min {stats_xy['min']:.2f}, med {stats_xy['median']:.2f} | "
-            f"mapping YX: min {stats_yx['min']:.2f}, med {stats_yx['median']:.2f}"
-        )
-    except Exception:
-        pass
 
     return {
         "conn_x": conn_x,
         "conn_y": conn_y,
         "conn_z": conn_z,
-        "near_xy": int(near_xy),
-        "near_yx": int(near_yx),
-        "total_segments": int(total_segments),
-        "dist_xy": {"min": float(stats_xy["min"]), "median": float(stats_xy["median"])},
-        "dist_yx": {"min": float(stats_yx["min"]), "median": float(stats_yx["median"])},
     }
