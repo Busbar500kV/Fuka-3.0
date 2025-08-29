@@ -6,8 +6,8 @@
 
   "k_flux": 0.50,
   "k_motor": 0.25,
-  "diffuse": 0.05,
-  "decay": 0.05,
+  "diffuse": 0.01,
+  "decay": 0.01,
   "band": 3,
   "bc": "reflect",
 
