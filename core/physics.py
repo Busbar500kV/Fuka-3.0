@@ -371,34 +371,70 @@ class LocalState:
         # alias for legacy readers
         self.enc_strength = self.enc_map
         
-
+    ###
     def _maintain_and_decay(self):
+        """
+        Maintain/cull attractors with *explicit* connection support:
+        - If local connection strength is below a sustain threshold,
+          aggressively decay and remove quickly (no lingering “columns”).
+        - Otherwise do normal maintenance (energy pay + slow decay).
+        - Noise is re-tuned each tick from local strength.
+        """
         alive: List[Attractor] = []
-        if self.ndim != 2:
+        if self.ndim != 2 or not self.attractors:
             self.attractors = alive
             return
+    
+        # Use the best available S for strength evaluation (post-step map if present)
+        S_ref = getattr(self, "_last_S", None)
+        enc_n, _, strength = self._conn_strength_maps(S_ref if S_ref is not None else None)
+    
+        # Spawn threshold (high) and sustain threshold (slightly lower)
+        q_spawn = float(np.clip(getattr(self, "stim_edge_thr", 0.85), 0.0, 1.0))
+        v_spawn = float(np.quantile(strength, q_spawn)) if strength.size else 1.0
+    
+        q_sustain = max(0.50, q_spawn - 0.15)  # e.g., 0.70 if spawn was 0.85
+        v_sustain = float(np.quantile(strength, q_sustain)) if strength.size else (0.8 * v_spawn)
+    
         for k in self.attractors:
             y, x = k.pos
-            need = k.amp * k.maint_cost
-            if self.F[y, x] >= need:
-                self.F[y, x] -= need
-                self.B[y, x] += self.work_to_dissipation_fraction * need
-                k.bank = max(0.0, (1.0 - self.attr_bank_leak) * k.bank + 0.25 * need)
-            else:
-                k.amp *= 0.5
-            k.amp *= (1.0 - self.attr_decay)
-            k.amp = float(np.clip(k.amp, 0.0, self.attr_amp_max))
-            k.age += 1
+            # local connection support value
+            supp = float(strength[y, x]) if (0 <= y < strength.shape[0] and 0 <= x < strength.shape[1]) else 0.0
+            has_support = (supp >= v_sustain)
     
-            # retune noise from encoding (NEW)
+            # Retune noise from encoding/strength (lower noise if stronger support)
             sig_theta, sig_signal = self._noise_from_encoding(y, x)
             k.sigma_theta  = float(sig_theta)
             k.sigma_signal = float(sig_signal)
     
+            # Energy maintenance only when supported
+            need = k.amp * k.maint_cost
+            if has_support and (self.F[y, x] >= need):
+                self.F[y, x] -= need
+                self.B[y, x] += self.work_to_dissipation_fraction * need
+                # small bank memory remains fine
+                k.bank = max(0.0, (1.0 - self.attr_bank_leak) * k.bank + 0.25 * need)
+                # normal decay
+                k.amp *= (1.0 - self.attr_decay)
+            else:
+                # If no support (or not enough energy), decay hard
+                # – this removes “unsupported columns” quickly.
+                k.amp *= 0.5 * (1.0 - self.attr_decay)
+    
+            # Hard cull if far below sustain (prevents flicker)
+            if (not has_support) and (supp < 0.5 * v_sustain):
+                k.amp = 0.0  # drop immediately
+    
+            # Clamp + age
+            k.amp = float(np.clip(k.amp, 0.0, self.attr_amp_max))
+            k.age += 1
+    
+            # Keep if above minimum amplitude
             if k.amp >= self.attr_amp_min:
                 alive.append(k)
+    
         self.attractors = alive
-
+    
     # =======================
     # Gradient proposals
     # =======================
@@ -620,12 +656,15 @@ class LocalState:
     
         return drive
 
+    ##
     def _spawn_dishbrain(self, S: np.ndarray, E: np.ndarray):
         """
-        Deterministic spawn: place attractors on strong connection ridges.
-        - Strength from _conn_strength_maps(S).
-        - Pick top non-overlapping peaks above a quantile threshold.
-        - Theta aligns with local ∇S orientation (no random θ).
+        Deterministic spawn: place attractors ONLY on strong-connection ridges.
+    
+        Gate = connection strength (sqrt(enc × |kappa|) with mild ∇S boost).
+        - Threshold uses the same percentile knob as edges (stim_edge_thr).
+        - Non-maximum suppression to avoid overlap.
+        - Theta from local ∇S (no random θ).
         - Radii/amp scale with local encoding; noise from connection strength.
         - Energy-gated; no random propagation.
         """
@@ -634,17 +673,19 @@ class LocalState:
     
         H, W = self.shape
     
-        # strength := sqrt(enc × |kappa|) with mild ∇S boost (done inside helper)
+        # strength := sqrt(enc × |kappa|) with mild ∇S boost
         enc_n, _, strength = self._conn_strength_maps(S)
+        if strength.size == 0:
+            return
     
-        # candidate threshold using the same 'edge' percentile knob
+        # Spawn threshold = high-quantile of strength (uses "edge" knob)
         thr_q = float(np.clip(getattr(self, "stim_edge_thr", 0.85), 0.0, 1.0))
-        thr_v = float(np.quantile(strength, thr_q)) if strength.size else 1.0
+        thr_v = float(np.quantile(strength, thr_q))
         cand_mask = (strength >= thr_v)
         if not np.any(cand_mask):
             return
     
-        # non-maximum suppression over a tight neighborhood
+        # Non-maximum suppression over a tight neighborhood
         r_nms = 2
         peaks_yx = []
         visited = np.zeros_like(cand_mask, dtype=bool)
@@ -665,7 +706,7 @@ class LocalState:
         if not peaks_yx:
             return
     
-        # select at most K per tick and enforce spacing from existing attractors
+        # Select at most K per tick and enforce spacing from existing attractors
         max_per_tick = int(max(1, min(self.attr_spawn_trials, self.attr_max - len(self.attractors))))
         min_dist = 3.0  # pixels
         exist = [(int(a.pos[0]), int(a.pos[1])) for a in self.attractors]
@@ -685,25 +726,24 @@ class LocalState:
             if not _far_from_existing(y, x):
                 continue
     
-            # energy gate
+            # Energy gate
             if self.F[y, x] < self.attr_spawn_energy:
                 continue
     
-            # orientation from local gradient
-            gx = float(Sx[y, x])
-            gy = float(Sy[y, x])
+            # Orientation from local gradient
+            gx = float(Sx[y, x]); gy = float(Sy[y, x])
             theta = float(np.arctan2(gy, gx)) if (gx*gx + gy*gy) > 1e-12 else 0.0
     
-            # encoding-driven radii & amplitude (no randomness)
+            # Encoding-driven radii & amplitude (no randomness)
             enc_loc = float(enc_n[y, x])
             r_par  = float(np.mean(self.r_par_rng)  * (1.0 + self.enc_radius_par_mult  * enc_loc))
             r_perp = float(np.mean(self.r_perp_rng) * (1.0 + self.enc_radius_perp_mult * enc_loc))
             amp    = float(self.attr_amp_init      * (1.0 + self.enc_amp_mult         * enc_loc))
     
-            # noise tuned by local connection strength
+            # Noise tuned by local connection strength (stronger support ⇒ lower noise)
             sig_theta, sig_signal = self._noise_from_encoding(y, x)
     
-            # pay energy & spawn
+            # Pay energy & spawn
             self.F[y, x] -= self.attr_spawn_energy
             self.B[y, x] += self.work_to_dissipation_fraction * self.attr_spawn_energy
     
