@@ -5,7 +5,7 @@
   "space": 32,
 
   "k_flux": 0.50,
-  "k_motor": 0.08,
+  "k_motor": 0.15,
   "diffuse": 0.05,
   "decay": 0.05,
   "band": 3,
@@ -19,7 +19,7 @@
     "sources": [
       {
         "kind": "moving_peak_2d",
-        "amp": 1.2,
+        "amp": 500,
         "speed_x": 0.0,
         "speed_y": 0.0,
         "width_x": 2.0,
