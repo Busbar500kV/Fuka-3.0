@@ -1,11 +1,11 @@
 {
   "test_number": "Noisy_Att-01",
   "seed": 0,
-  "frames": 500,
+  "frames": 200,
   "space": 32,
 
   "k_flux": 0.50,
-  "k_motor": 0.15,
+  "k_motor": 0.25,
   "diffuse": 0.05,
   "decay": 0.05,
   "band": 3,
